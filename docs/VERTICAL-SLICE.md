@@ -54,7 +54,7 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 ## Progress dashboard
 
 - [x] VS-01 — Repository and Docker foundation
-- [ ] VS-02 — Minimal schema, migration, and deterministic seed
+- [x] VS-02 — Minimal schema, migration, and deterministic seed
 - [ ] VS-03 — Telemetry ingestion into Redis
 - [ ] VS-04 — Idempotent worker and current pole state
 - [ ] VS-05 — Surveyed-tree span localization
@@ -112,49 +112,49 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 
 ### Minimum tables
 
-- [ ] `substations`
-- [ ] `feeders`
-- [ ] `distribution_transformers`
-- [ ] `poles`
-- [ ] `devices`
-- [ ] `device_bindings`
-- [ ] `topology_edges`
-- [ ] `telemetry_events`
-- [ ] `pole_states`
-- [ ] `device_health`
-- [ ] `incidents`
-- [ ] `incident_poles`
-- [ ] `tickets`
-- [ ] `ticket_events`
+- [x] `substations`
+- [x] `feeders`
+- [x] `distribution_transformers`
+- [x] `poles`
+- [x] `devices`
+- [x] `device_bindings`
+- [x] `topology_edges`
+- [x] `telemetry_events`
+- [x] `pole_states`
+- [x] `device_health`
+- [x] `incidents`
+- [x] `incident_poles`
+- [x] `tickets`
+- [x] `ticket_events`
 
 Scheduled outages, full registry import tables, topology versions, simulator history, and richer diagnostics can be added after the backbone works unless a foreign-key boundary requires them earlier.
 
 ### Implementation
 
-- [ ] Define the slice enums used by these tables.
-- [ ] Use UTC `TIMESTAMPTZ` values.
-- [ ] Give every telemetry event a unique generated `event_id`.
-- [ ] Enforce one current `pole_states` row per pole.
-- [ ] Enforce one active device binding per pole and per device.
-- [ ] Represent a DT-root edge with nullable `parent_pole_id`.
-- [ ] Add a uniqueness mechanism for one active incident fingerprint.
-- [ ] Add the initial Alembic migration.
-- [ ] Add idempotent seed logic for one substation, one feeder, `DT-001`, four poles, four devices, bindings, surveyed edges, and initial `LIVE` states.
-- [ ] Give the transformer and poles deterministic coordinates and PIN code `560078`.
-- [ ] Run migration and seed logic from the one-shot `init` service.
+- [x] Define the slice enums used by these tables.
+- [x] Use UTC `TIMESTAMPTZ` values.
+- [x] Give every telemetry event a unique generated `event_id`.
+- [x] Enforce one current `pole_states` row per pole.
+- [x] Enforce one active device binding per pole and per device.
+- [x] Represent a DT-root edge with nullable `parent_pole_id`.
+- [x] Add a uniqueness mechanism for one active incident fingerprint.
+- [x] Add the initial Alembic migration.
+- [x] Add idempotent seed logic for one substation, one feeder, `DT-001`, four poles, four devices, bindings, surveyed edges, and initial `LIVE` states.
+- [x] Give the transformer and poles deterministic coordinates and PIN code `560078`.
+- [x] Run migration and seed logic from the one-shot `init` service.
 
 ### Verification
 
-- [ ] Starting with an empty database creates every minimum table.
-- [ ] Running initialization twice is safe.
-- [ ] Every pole has exactly one path to `DT-001`.
-- [ ] The seeded edge count is four when the DT root is included.
-- [ ] All four poles begin `LIVE`.
-- [ ] Invalid cross-DT or self-referencing edges fail.
+- [x] Starting with an empty database creates every minimum table.
+- [x] Running initialization twice is safe.
+- [x] Every pole has exactly one path to `DT-001`.
+- [x] The seeded edge count is four when the DT root is included.
+- [x] All four poles begin `LIVE`.
+- [x] Invalid cross-DT or self-referencing edges fail.
 
 ### Exit condition
 
-- [ ] A fresh stack always presents the same usable surveyed network without a separate seed command.
+- [x] A fresh stack always presents the same usable surveyed network without a separate seed command.
 
 ---
 

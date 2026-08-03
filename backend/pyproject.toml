@@ -5,6 +5,7 @@ description = "Outage localization API and telemetry worker"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "alembic>=1.16,<2",
     "fastapi>=0.116,<1",
     "pydantic-settings>=2.10,<3",
     "psycopg[binary]>=3.2,<4",
@@ -31,6 +32,7 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 addopts = "-q"
+markers = ["integration: requires a running PostgreSQL database"]
 testpaths = ["tests"]
 
 [tool.ruff]

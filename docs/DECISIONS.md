@@ -168,6 +168,14 @@ Partial restoration leaves the original ticket open with `REPAIR_NOT_VERIFIED` a
 
 **Rejected:** A manual verify/close endpoint and treating `boot` by itself as proof of stable restoration.
 
+## 2026-08-03 — Fix the backbone seed and initialize it transactionally
+
+**Chosen:** Alembic revision `20260803_0001` creates the minimum schema. The one-shot `init` process checks its dependencies, upgrades the database to `head`, and then inserts missing seed records in one transaction. Re-running initialization does not duplicate or reset existing records.
+
+The backbone seed is `SUB-001 → FDR-001 → DT-001 → P-001 → P-002 → P-003 → P-004`, with devices `DEV-P-001` through `DEV-P-004`. All four topology edges are `SURVEYED` version 1, the DT and poles have fixed JP Nagar coordinates and PIN code `560078`, and all four initial pole states are `LIVE`.
+
+**Reason:** A fixed, minimal graph makes every later telemetry, localization, incident, and restoration test reproducible while leaving unknown-topology data generation outside the backbone slice.
+
 ## What we would do with two more weeks
 
 - Add a PostgreSQL inbox/outbox around queue publication.

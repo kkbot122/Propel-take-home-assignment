@@ -96,6 +96,16 @@ without deleting its named volumes with:
 docker compose down
 ```
 
+To discard all local PostgreSQL and Redis data and rebuild the deterministic
+demo state, remove the named volumes before starting again:
+
+```bash
+docker compose down --volumes
+docker compose up --build
+```
+
+The first command permanently removes local development data.
+
 ## Fault simulation
 
 The simulator will support:
@@ -169,6 +179,7 @@ Not included:
 
 ## Current status
 
-VS-01, the repository and Docker foundation, is implemented. The domain model,
-telemetry pipeline, localization workflow, operator features, public deployment,
-demo video, and measured performance results remain to be built.
+VS-01 and VS-02 are implemented: the Docker foundation, migrated minimum schema,
+and deterministic surveyed-network seed are available. The telemetry pipeline,
+localization workflow, operator features, public deployment, demo video, and
+measured performance results remain to be built.

@@ -12,6 +12,7 @@ x-backend-environment: &backend-environment
 x-backend-build: &backend-build
   context: ./backend
   dockerfile: Dockerfile
+  target: runtime
 
 services:
   database:
@@ -86,6 +87,18 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  backend-tests:
+    profiles: ["test"]
+    build:
+      <<: *backend-build
+      target: test
+    command: ["pytest", "-m", "integration"]
+    environment: *backend-environment
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: "no"
+
   frontend:
     build:
       context: ./frontend
@@ -106,4 +119,3 @@ services:
 volumes:
   postgres-data:
   redis-data:
-

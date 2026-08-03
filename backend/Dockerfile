@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:0.11.26 AS uv
 
-FROM python:3.13-slim-bookworm
+FROM python:3.13-slim-bookworm AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -16,6 +16,8 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src
+COPY alembic.ini ./
+COPY alembic ./alembic
 
 RUN uv sync --frozen --no-dev
 
@@ -29,3 +31,11 @@ EXPOSE 8000
 
 CMD ["uvicorn", "propel.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
 
+FROM runtime AS test
+
+USER root
+COPY --chown=propel:propel tests ./tests
+RUN uv sync --frozen
+USER propel
+
+CMD ["pytest"]
