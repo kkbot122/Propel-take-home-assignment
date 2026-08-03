@@ -1,0 +1,749 @@
+# Architecture
+
+## 1. Purpose
+
+The system converts binary pole telemetry into a trustworthy outage incident.
+
+Its primary output is one operator-facing ticket containing:
+
+* Probable failed asset: span, distribution transformer, or feeder
+* Navigation coordinates
+* PIN code
+* Affected pole count
+* Fault classification
+* Localization precision
+* Confidence and supporting evidence
+* Ticket and restoration status
+
+The system must remain useful despite missing topology, incomplete sensor coverage, dropped messages, stale events, duplicate delivery, clock skew, device failure, and scheduled outages.
+
+## 2. Design goals
+
+1. Localize a fault within 120 seconds at p95.
+2. Produce one incident per probable root fault, not one alert per dark pole.
+3. Keep the localization path deterministic, testable, and explainable.
+4. Clearly distinguish recorded, inferred, and unavailable topology.
+5. Avoid tickets for isolated sensor failures and planned shutdowns.
+6. Verify restoration from telemetry rather than operator claims.
+7. Start the complete stack with `docker compose up`.
+8. Keep the architecture small enough to build, deploy, and explain within the assignment scope.
+
+## 3. Non-goals
+
+* Crew routing, dispatch optimization, or vehicle scheduling
+* Production-grade authentication and authorization
+* Hardware or firmware changes
+* Mobile application
+* Historical reporting or predictive maintenance
+* Multi-city or statewide operation
+
+## 4. System context
+
+### Inputs
+
+* IoT telemetry payloads
+* Pole registry
+
+  * Recorded topology for approximately 40% of transformers
+  * GPS and transformer membership, but no pole ordering, for approximately 60%
+* Distribution-transformer registry
+* Feeder-to-transformer relationships
+* Scheduled-outage feed
+* PIN-code data or fallback geocoding data
+* Operator ticket actions
+* Fault-simulator commands
+
+### Outputs
+
+* Fault localization
+* Fault classification
+* Localization precision and confidence
+* Grouped incident and ticket
+* Operator-console updates
+* Restoration verification result
+
+## 5. High-level design
+
+```mermaid
+flowchart TD
+    Sensors[IoT Pole Sensors]
+    Simulator[Fault Simulator]
+
+    Sensors --> API[Telemetry Ingestion API]
+    Simulator --> API
+
+    API --> Queue[Event Queue]
+    Queue --> Processor[Telemetry Processor]
+
+    Processor --> Validate[Validate Payload]
+    Validate --> Deduplicate[Deduplicate Using Device ID + Sequence]
+    Deduplicate --> Order[Handle Late and Out-of-Order Events]
+    Order --> State[(Current Pole State Store)]
+
+    Registry[(Pole and Transformer Registry)]
+    Known[Known Topology<br/>Recorded Parent Relationships]
+    Unknown[Unknown Topology<br/>GPS and DT Membership Only]
+
+    Registry --> Known
+    Registry --> Unknown
+
+    Scheduled[Scheduled Outage Feed]
+
+    State --> Detection[Fault Detection and Grouping]
+    Known --> Detection
+    Unknown --> Detection
+    Scheduled --> Detection
+
+    Detection --> Classification[Classify Fault<br/>Span • DT • Feeder • Sensor Anomaly]
+    Classification --> Confidence[Calculate Confidence and Precision]
+    Confidence --> Incident[Create or Update Grouped Incident]
+
+    Incident --> TicketService[Incident and Ticket Service]
+    TicketService <--> TicketStore[(Ticket Store)]
+    TicketService <--> Console[Operator Console]
+
+    State --> Restore[Restoration Verification]
+    TicketStore --> Restore
+
+    Restore -->|Telemetry confirms power restored| Verified[Verified and Closed]
+    Restore -->|Affected poles remain dark| Unverified[Repair Not Verified]
+```
+
+The boxes represent logical components. The implementation may run several components in the same codebase while using separate processes for the HTTP API and telemetry worker.
+
+## 6. Component responsibilities
+
+### 6.1 Telemetry Ingestion API
+
+Accepts device and simulator telemetry over HTTPS.
+
+Responsibilities:
+
+* Validate the payload shape and required fields.
+* Reject unknown event types.
+* Record a trusted server-side `received_at` timestamp.
+* Reject or quarantine unknown pole IDs.
+* Publish accepted telemetry to the Redis queue.
+* Return quickly without running localization inside the request.
+
+The ingestion API is intentionally thin so burst traffic does not block on database traversal or fault analysis.
+
+### 6.2 Redis Event Queue
+
+Provides a buffer between ingestion and processing.
+
+Responsibilities:
+
+* Absorb short bursts.
+* Preserve accepted events until acknowledged by a worker.
+* Support retries after transient processing failures.
+* Decouple API availability from localization latency.
+
+The queue is a transport mechanism, not the source of truth. Raw accepted telemetry is persisted before or during processing.
+
+### 6.3 Telemetry Processor
+
+Consumes telemetry and updates the current best-known state of each pole.
+
+Processing sequence:
+
+1. Validate the event against the domain rules.
+2. Resolve the current device-to-pole binding.
+3. Deduplicate using device identity and sequence number.
+4. Handle sequence reset after a `boot` event.
+5. Compare the event with the current accepted state.
+6. Reject stale state transitions while retaining the raw event for audit.
+7. Update device-health metadata.
+8. Update `PoleState`.
+9. trigger fault-analysis evaluation for the affected DT or feeder.
+
+Device timestamps are not used as the sole ordering mechanism because clocks may be skewed. The per-device sequence number and server receive time are the main ordering signals.
+
+### 6.4 Pole State Store
+
+Stores the derived current state used by localization.
+
+Suggested states:
+
+* `LIVE`
+* `DARK`
+* `STALE`
+* `UNKNOWN`
+* `NO_DEVICE`
+
+A state record includes the last accepted event, device sequence, device timestamp, server receive timestamp, firmware version, battery level, signal strength, and a reason for the current state.
+
+The localization processor reads this derived state instead of replaying the entire telemetry history on every event.
+
+### 6.5 Network Topology Registry
+
+Stores substations, feeders, transformers, poles, and topology edges.
+
+All topology is exposed through one edge model:
+
+```text
+parent pole → child pole
+```
+
+Each edge records its provenance:
+
+* `SURVEYED` — directly supplied by the registry
+* `INFERRED` — generated from geography
+* `UNKNOWN` — no defensible edge could be produced
+
+Each inferred edge includes a confidence score. This allows the same localization engine to operate on recorded and inferred topology while preserving uncertainty.
+
+### 6.6 Fault Localization Processor
+
+The deterministic core of the system.
+
+Responsibilities:
+
+* Correlate dark-pole observations.
+* Detect live-to-dark boundaries.
+* Group downstream symptoms into one incident.
+* Distinguish span, DT, feeder, and sensor anomalies.
+* Account for scheduled outages.
+* Determine localization precision.
+* Calculate confidence and produce supporting evidence.
+
+### 6.7 Incident and Ticket Service
+
+Owns the operator-facing workflow.
+
+Responsibilities:
+
+* Create or update one incident for one probable root fault.
+* Prevent duplicate active tickets for the same fault boundary.
+* Store the affected pole set and evidence snapshot.
+* Apply valid ticket-state transitions.
+* Accept acknowledge, assign-crew, and resolution-claimed actions.
+* Reject invalid transitions.
+* Coordinate restoration verification and closure.
+
+### 6.8 Operator Console
+
+Designed for a non-engineer working under time pressure.
+
+The primary screen should emphasize:
+
+* Active incidents
+* Severity and affected-pole count
+* Fault type
+* Probable asset and location
+* PIN code and coordinates
+* Confidence level
+* Short reason for the conclusion
+* Ticket status and required next action
+
+The incident list and map should work together. Raw telemetry, sequence numbers, firmware details, and internal graph data should remain available in a secondary diagnostic view rather than dominate the main screen.
+
+### 6.9 Restoration Verification
+
+Restoration telemetry follows the same ingest pipeline as outage telemetry.
+
+When a crew marks work as resolved:
+
+1. The ticket enters `RESOLVED`, meaning repair has been claimed.
+2. The verifier reads the incident's affected-pole set.
+3. It waits for sufficient fresh restoration evidence.
+4. If the expected observable poles return to `LIVE`, the ticket becomes `VERIFIED` and then `CLOSED`.
+5. If poles remain dark, the ticket remains open and the UI shows `REPAIR_NOT_VERIFIED`.
+
+An operator action alone cannot produce `VERIFIED` or `CLOSED`.
+
+## 7. Core data model
+
+### Substation
+
+* `substation_id`
+* location
+
+### Feeder
+
+* `feeder_id`
+* `substation_id`
+
+### DistributionTransformer
+
+* `dt_id`
+* `feeder_id`
+* latitude and longitude
+* `capacity_kva`
+* `households_served`
+
+### Pole
+
+* `pole_id`
+* latitude and longitude
+* `dt_id`
+* `feeder_id`
+* nullable `seq_on_line`
+* nullable `parent_pole_id`
+* nullable `pincode`
+* nullable `device_id`
+* `pole_type`
+* `ward`
+
+### Device
+
+* `device_id`
+* current `pole_id`
+* firmware version
+* latest battery and RSSI values
+* last-seen timestamp
+
+Devices are separate from poles because a physical device may be replaced while the pole identity remains stable.
+
+### TelemetryEvent
+
+Immutable accepted event record:
+
+* `device_id`
+* `pole_id`
+* event type
+* energized flag
+* device timestamp
+* server receive timestamp
+* sequence number
+* battery voltage
+* RSSI
+* firmware version
+* processing outcome
+
+### PoleState
+
+Derived current state:
+
+* `pole_id`
+* status
+* last accepted sequence
+* last device timestamp
+* last server receive timestamp
+* source event ID
+* state reason
+
+### TopologyEdge
+
+* `dt_id`
+* `parent_pole_id`
+* `child_pole_id`
+* source: surveyed or inferred
+* confidence
+* inference metadata
+
+### ScheduledOutage
+
+* outage ID
+* scope: feeder or DT
+* target ID
+* start and end
+* reason
+
+### Incident
+
+* `incident_id`
+* fault type
+* suspected asset
+* coordinates
+* PIN code
+* affected pole IDs and count
+* localization precision
+* confidence and reason
+* detected timestamp
+* current state
+
+### Ticket
+
+* `ticket_id`
+* `incident_id`
+* workflow status
+* assigned crew stub
+* resolution-claimed timestamp
+* verified timestamp
+* status history
+
+### SimulatedFault
+
+* simulation fault ID
+* fault type
+* target asset
+* injection and repair timestamps
+* noise profile
+* expected localization result
+
+## 8. Telemetry ordering and deduplication
+
+### Duplicate handling
+
+Events are considered duplicates when the same device produces an already accepted sequence number within the same boot generation.
+
+A logical key is:
+
+```text
+device_id + boot_generation + sequence_number
+```
+
+Duplicate events are retained or counted for diagnostics but do not update pole state twice.
+
+### Boot and sequence reset
+
+A valid `boot` event starts a new boot generation and permits the sequence number to restart. A low sequence number without a corresponding boot event is treated cautiously and does not automatically overwrite newer state.
+
+### Out-of-order delivery
+
+For one device, sequence number outranks device timestamp. Across devices, the system correlates events using server receive time and a bounded analysis window rather than assuming synchronized clocks.
+
+### Stale retries
+
+A late `power_lost` event may arrive after restoration. It remains in the raw event log but cannot replace a newer accepted state from the same device generation.
+
+## 9. Fault detection and localization
+
+### 9.1 Analysis scope
+
+A pole-state change first triggers analysis for its distribution transformer. The system may expand to feeder-level analysis when multiple DTs on the same feeder show a correlated outage pattern.
+
+This bounds normal processing to a small subgraph rather than scanning all poles.
+
+### 9.2 Recorded topology
+
+For a transformer with surveyed parent relationships:
+
+1. Read the current state of poles in the DT tree.
+2. Find dark poles whose parent is live.
+3. Treat each live-parent/dark-child edge as a candidate fault boundary.
+4. Collect the observable dark descendants below each candidate.
+5. Remove candidates contradicted by live descendants that cannot be explained by missing sensors or stale state.
+6. Merge duplicate observations referring to the same boundary.
+7. Produce one incident per defensible boundary.
+
+Example:
+
+```text
+DT → P1 live → P2 live → P3 dark → P4 dark
+```
+
+Output:
+
+```text
+Probable span fault: P2–P3
+Affected poles: P3 and P4
+Localization precision: exact surveyed span
+```
+
+### 9.3 Transformer fault
+
+A DT-level fault is considered when all or nearly all observable poles under one transformer become dark within the correlation window and there is no live pole beneath the transformer that establishes a lower boundary.
+
+The output location is the transformer asset and its coordinates.
+
+### 9.4 Feeder fault
+
+A feeder-level fault is considered when multiple transformers supplied by the same feeder show correlated DT-wide loss patterns.
+
+The system groups this as one feeder incident rather than creating one independent DT incident per transformer.
+
+### 9.5 Sensor anomaly
+
+An isolated dark pole is not enough to create an outage ticket.
+
+A pattern such as:
+
+```text
+parent live → pole dark → child live
+```
+
+is inconsistent with a physical upstream line failure. It is classified as a probable sensor or lamp-circuit anomaly and is shown separately from operational outage tickets.
+
+## 10. Missing-topology strategy
+
+Approximately 60% of transformers have coordinates and DT membership but no recorded parent or sequence fields.
+
+### 10.1 Available evidence
+
+For these poles the system still has:
+
+* Accurate pole coordinates
+* Transformer coordinates
+* Feeder and transformer membership
+* Device presence and firmware
+* Live, dark, stale, or unknown telemetry state
+* Historical events collected after deployment
+
+### 10.2 Initial inferred graph
+
+The first implementation builds a constrained geographic tree rooted at the transformer:
+
+1. Group poles by `dt_id`.
+2. Use the transformer as the root.
+3. Generate plausible edges between geographically nearby assets.
+4. Prefer a parent that is closer to the transformer than its child.
+5. Penalize unusually long spans, crossings, sharp reversals, and implausible branching.
+6. Select a low-cost connected tree.
+7. Store every generated edge as `INFERRED` with a confidence value and inference version.
+
+This graph is an estimate, not a surveyed truth.
+
+### 10.3 Localization behaviour
+
+The system returns the most precise defensible result:
+
+* **Exact span:** surveyed edge with a clear live/dark boundary
+* **Probable span:** inferred edge with strong geographic and telemetry support
+* **Fault corridor:** multiple adjacent inferred spans remain plausible
+* **DT-level area:** topology evidence is too weak for a span claim
+
+The UI must label each result explicitly. It must never display an inferred span as surveyed.
+
+### 10.4 Known failure modes
+
+Geographic inference can be wrong when:
+
+* Parallel streets place unrelated poles close together.
+* A line crosses a road or follows a non-obvious path.
+* Branches are spatially close to the main run.
+* Coordinates are accurate but electrical connectivity is not geographically nearest.
+* Missing-device gaps hide the true boundary.
+
+When evidence conflicts, the system lowers confidence and degrades to a corridor or DT-level result rather than inventing precision.
+
+### 10.5 Future improvement
+
+Repeated correlated outage and restoration patterns can provide evidence about which poles share upstream paths. This may refine inferred edges over time, but learned topology is not allowed to silently replace surveyed topology.
+
+## 11. Incident grouping
+
+One fault may produce dozens of dark-pole events.
+
+The grouping key is based on:
+
+* Candidate root asset or boundary
+* DT or feeder scope
+* Overlapping affected-pole sets
+* Event-time correlation window
+* Existing active incident state
+
+A new event updates an existing active incident when it is explained by the same root candidate. A separate incident is created when the topology supports an independent boundary.
+
+The incident retains the evidence used at detection time so later state changes do not erase the original reasoning.
+
+## 12. Confidence model
+
+Confidence is deterministic and explainable. It combines:
+
+* Topology provenance: surveyed, inferred, or unavailable
+* Number and proportion of corroborating poles
+* Sensor coverage in the affected area
+* Temporal coherence of state changes
+* Presence of a clear live/dark boundary
+* Contradictory live descendants
+* Device health, firmware, RSSI, and battery evidence
+* Overlap with a scheduled-outage window
+* Missing PIN or location fallback
+
+Suggested presentation:
+
+* `HIGH` — surveyed boundary with strong downstream agreement and no material contradiction
+* `MEDIUM` — inferred boundary or incomplete telemetry with adequate corroboration
+* `LOW` — only DT-level or corridor localization is defensible
+
+The API should return both a normalized score and a list of reasons. The UI should emphasize the level and plain-language reason rather than only a percentage.
+
+## 13. Scheduled-outage handling
+
+The scheduled-outage feed is supporting evidence, not absolute truth.
+
+When observed loss overlaps a scheduled feeder or DT outage:
+
+* Mark the observation as planned or suppressed.
+* Continue monitoring telemetry.
+* Avoid creating a normal fault ticket unless evidence materially conflicts with the schedule.
+* Surface overruns or unexpected scope as operator-visible exceptions.
+
+This avoids both obvious false positives and blind trust in an imperfect schedule.
+
+## 14. Ticket lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Detected
+    Detected --> Acknowledged
+    Acknowledged --> CrewAssigned
+    CrewAssigned --> Resolved: repair claimed
+    Resolved --> Verified: telemetry confirms restoration
+    Resolved --> CrewAssigned: restoration not verified
+    Verified --> Closed
+    Closed --> [*]
+```
+
+Only the service can transition a ticket to `VERIFIED` or `CLOSED` after telemetry evaluation.
+
+## 15. API surface
+
+The exact schema will be maintained in generated OpenAPI documentation. Planned endpoints:
+
+| Method | Path                                | Purpose                                    |
+| ------ | ----------------------------------- | ------------------------------------------ |
+| `POST` | `/api/telemetry`                    | Accept one telemetry event                 |
+| `POST` | `/api/telemetry/batch`              | Accept a bounded telemetry batch           |
+| `GET`  | `/api/incidents`                    | List incidents with filters                |
+| `GET`  | `/api/incidents/{id}`               | Read incident evidence and affected assets |
+| `GET`  | `/api/tickets/{id}`                 | Read ticket and transition history         |
+| `POST` | `/api/tickets/{id}/acknowledge`     | Acknowledge a detected ticket              |
+| `POST` | `/api/tickets/{id}/assign`          | Assign a crew stub                         |
+| `POST` | `/api/tickets/{id}/resolve`         | Record a repair claim                      |
+| `GET`  | `/api/network/poles`                | Read poles for map display                 |
+| `GET`  | `/api/network/topology/{dt_id}`     | Read surveyed or inferred DT topology      |
+| `GET`  | `/api/scheduled-outages`            | Read current scheduled outages             |
+| `POST` | `/api/simulator/faults`             | Inject a simulated fault                   |
+| `POST` | `/api/simulator/faults/{id}/repair` | Repair a simulated fault                   |
+| `POST` | `/api/simulator/noise`              | Inject independent noise                   |
+| `GET`  | `/health`                           | Liveness and dependency health             |
+
+## 16. Persistence model
+
+The design contains three logical stores:
+
+1. **Network topology store** — poles, transformers, feeders, and edges
+2. **Telemetry and pole-state store** — immutable events and current derived state
+3. **Incident and ticket store** — incidents, affected poles, tickets, and transition history
+
+They may share one relational database in the first implementation to simplify transactions, Docker startup, deployment, and backup. Redis remains the event buffer rather than the long-term record.
+
+## 17. PIN-code resolution
+
+Resolution order:
+
+1. Use the downstream or failed asset's registry PIN code when present.
+2. Use another pole on the same localized span or nearby affected cluster.
+3. Use a bounded offline coordinate-to-PIN dataset.
+4. Return an explicit `PIN_UNAVAILABLE` state if no defensible result exists.
+
+The deployed application must not depend on a reviewer-provided geocoding key.
+
+## 18. AI feature
+
+The proposed AI feature is a short operator-facing incident explanation generated from deterministic incident evidence.
+
+Example input to the model:
+
+* Fault classification
+* Candidate asset
+* Affected pole count
+* Confidence reasons
+* Contradictions or missing data
+* Restoration status
+
+The model does not choose the fault location, confidence score, ticket state, or restoration result.
+
+Fallback behaviour:
+
+* If the model is unavailable, the service renders a deterministic template.
+* Generated text is never treated as system state.
+* The UI labels generated summaries and still exposes the underlying evidence.
+* Cost, latency, and model usage will be measured and documented after implementation.
+
+## 19. Scalability and performance
+
+Expected subdivision scale:
+
+* Approximately 38,400 poles
+* Approximately 34,900 devices
+* 412 distribution transformers
+* 31 feeders
+* About 39 messages per second during steady heartbeats
+* Bursts of several thousand events after a large outage
+
+Design choices supporting the targets:
+
+* Thin ingestion endpoint
+* Redis buffering
+* Worker-based processing
+* Indexed current-state table
+* Analysis scoped to the affected DT before feeder expansion
+* Precomputed adjacency lists
+* Batch reads and writes
+* Paginated incident APIs
+* Cached map and registry data
+
+Target measurements:
+
+| Metric                      |                               Target |
+| --------------------------- | -----------------------------------: |
+| Fault to localized ticket   |                        `< 120 s` p95 |
+| Sustained ingest            |                        `≥ 500 msg/s` |
+| Burst                       | `5,000 messages / 10 s` without loss |
+| Incident-list load          |                              `< 2 s` |
+| Restoration to verification |                            `< 120 s` |
+
+No performance target will be claimed until it is measured against a documented test.
+
+## 20. Reliability and failure handling
+
+* Queue processing uses acknowledgement and bounded retries.
+* Poison events move to a dead-letter path with a reason.
+* Raw events remain immutable for debugging.
+* Pole state updates are idempotent.
+* Localization and ticket creation use idempotency keys to avoid duplicate incidents.
+* Dependency health is exposed through `/health`.
+* The UI shows stale data and degraded dependencies instead of silently appearing healthy.
+* Simulator traffic is marked so it cannot be confused with production traffic.
+
+## 21. Testing strategy
+
+Highest-priority tests cover the localization engine:
+
+* Known topology produces the expected failed span.
+* One span fault creates one incident despite many dark poles.
+* Multiple independent boundaries create multiple incidents.
+* One isolated dark sensor with live descendants creates no outage ticket.
+* DT-wide loss creates one DT incident.
+* Correlated DT losses create one feeder incident.
+* Scheduled outage is suppressed.
+* Duplicate and late events do not corrupt pole state.
+* Inferred topology produces lower precision and confidence than surveyed topology.
+* Repair claims do not close tickets while poles remain dark.
+* Restoration telemetry verifies and closes the correct ticket.
+
+Integration tests exercise the full simulator-to-UI path. Load tests measure the published throughput and latency targets.
+
+## 22. Deployment shape
+
+Planned Docker Compose services:
+
+```text
+frontend
+backend-api
+telemetry-worker
+redis
+database
+```
+
+The stack must initialize its schema and seed a usable synthetic network automatically. A reviewer should see active network data immediately after startup without running a separate migration or seed command.
+
+## 23. Security baseline
+
+Authentication is intentionally minimal because production identity management is outside scope.
+
+The build still includes:
+
+* Input validation
+* Request size limits
+* Simulator endpoint separation
+* No committed secrets
+* Environment-based configuration
+* Parameterized database queries
+* Safe error responses
+* Basic rate or burst protection on public endpoints
+
+## 24. Known limitations
+
+* GPS-derived topology cannot guarantee electrical adjacency.
+* Silent devices make absence of telemetry ambiguous.
+* Some faults may only be localizable to a corridor or transformer area.
+* Scheduled-outage data can be stale or incorrect.
+* Household impact is estimated from transformer metadata rather than direct customer telemetry.
+* The first version handles one subdivision only.
+
+These limitations are surfaced through confidence, precision labels, and operator-visible evidence rather than hidden.
