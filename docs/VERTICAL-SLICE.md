@@ -56,7 +56,7 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 - [x] VS-01 — Repository and Docker foundation
 - [x] VS-02 — Minimal schema, migration, and deterministic seed
 - [x] VS-03 — Telemetry ingestion into Redis
-- [ ] VS-04 — Idempotent worker and current pole state
+- [x] VS-04 — Idempotent worker and current pole state
 - [ ] VS-05 — Surveyed-tree span localization
 - [ ] VS-06 — Incident grouping and ticket workflow
 - [ ] VS-07 — Fault injection, repair, and restoration verification
@@ -230,34 +230,34 @@ XACK
 
 ### Implementation
 
-- [ ] Create the Redis consumer group idempotently.
-- [ ] Consume new and pending messages.
-- [ ] Insert the immutable raw telemetry record.
-- [ ] Treat repeated `event_id` values as idempotent retries.
-- [ ] Track a boot generation and last accepted sequence per device.
-- [ ] Reject stale lower-sequence transitions within one boot generation.
-- [ ] Implement slice state transitions:
+- [x] Create the Redis consumer group idempotently.
+- [x] Consume new and pending messages.
+- [x] Insert the immutable raw telemetry record.
+- [x] Treat repeated `event_id` values as idempotent retries.
+- [x] Track a boot generation and last accepted sequence per device.
+- [x] Reject stale lower-sequence transitions within one boot generation.
+- [x] Implement slice state transitions:
   - `heartbeat` with energized power → `LIVE`
   - `power_lost` → `DARK`
   - `boot` → new boot generation without proving stable restoration
   - `power_restored` → `LIVE`
-- [ ] Store device timestamp and trusted receive timestamp separately.
-- [ ] Commit all database mutations before acknowledging Redis.
-- [ ] Send repeatedly failing poison messages to a dead-letter stream.
-- [ ] Trigger debounced analysis for the affected DT after a meaningful state change.
+- [x] Store device timestamp and trusted receive timestamp separately.
+- [x] Commit all database mutations before acknowledging Redis.
+- [x] Send repeatedly failing poison messages to a dead-letter stream.
+- [x] Trigger debounced analysis for the affected DT after a meaningful state change.
 
 ### Verification
 
-- [ ] `power_lost` changes `P-002` from `LIVE` to `DARK`.
-- [ ] Replaying the same event changes state only once.
-- [ ] Sequence `101` followed by `100` cannot regress state.
-- [ ] A worker restart can finish an unacknowledged message.
-- [ ] A failed PostgreSQL transaction leaves the Redis message unacknowledged.
-- [ ] `boot` followed by sequence reset starts a new generation.
+- [x] `power_lost` changes `P-002` from `LIVE` to `DARK`.
+- [x] Replaying the same event changes state only once.
+- [x] Sequence `101` followed by `100` cannot regress state.
+- [x] A worker restart can finish an unacknowledged message.
+- [x] A failed PostgreSQL transaction leaves the Redis message unacknowledged.
+- [x] `boot` followed by sequence reset starts a new generation.
 
 ### Exit condition
 
-- [ ] The database contains an auditable raw event and one correct current state after normal delivery, duplicate delivery, and worker retry.
+- [x] The database contains an auditable raw event and one correct current state after normal delivery, duplicate delivery, and worker retry.
 
 ---
 

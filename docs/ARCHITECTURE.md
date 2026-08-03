@@ -76,7 +76,7 @@ flowchart TD
     Queue --> Processor[Telemetry Processor]
 
     Processor --> Validate[Validate Payload]
-    Validate --> Deduplicate[Deduplicate Using Device ID + Sequence]
+    Validate --> Deduplicate[Idempotent Event ID + Device Sequence]
     Deduplicate --> Order[Handle Late and Out-of-Order Events]
     Order --> State[(Current Pole State Store)]
 
@@ -167,15 +167,20 @@ Consumes telemetry and updates the current best-known state of each pole.
 
 Processing sequence:
 
-1. Validate the event against the domain rules.
-2. Resolve the current device-to-pole binding.
-3. Deduplicate using device identity and sequence number.
-4. Handle sequence reset after a `boot` event.
-5. Compare the event with the current accepted state.
-6. Reject stale state transitions while retaining the raw event for audit.
-7. Update device-health metadata.
-8. Update `PoleState`.
-9. trigger fault-analysis evaluation for the affected DT or feeder.
+1. Read new or recoverable pending entries through a Redis consumer group.
+2. Revalidate the flattened stream message and resolve the device binding that
+   was valid at trusted receive time.
+3. Treat an existing event ID as a successful idempotent replay.
+4. Lock the device cursor and apply boot-generation and sequence ordering.
+5. Insert the immutable raw event, including accepted, duplicate, or stale outcome.
+6. Update device health and `PoleState` only for an accepted transition.
+7. Commit all PostgreSQL mutations.
+8. Schedule the affected DT in a debounced sorted set after a meaningful state
+   change, then acknowledge the stream entry.
+
+Failures remain pending for retry. After the configured delivery limit, a bounded
+copy of a poison entry and its non-sensitive failure reason is written to the
+dead-letter stream before the source entry is acknowledged.
 
 Device timestamps are not used as the sole ordering mechanism because clocks may be skewed. The per-device sequence number and server receive time are the main ordering signals.
 

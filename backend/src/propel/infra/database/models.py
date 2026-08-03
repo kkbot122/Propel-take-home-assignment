@@ -265,6 +265,7 @@ class TelemetryEvent(Base):
     processing_outcome: Mapped[ProcessingOutcome] = mapped_column(
         text_enum(ProcessingOutcome, "processing_outcome"), nullable=False
     )
+    state_changed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     raw_payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
@@ -302,6 +303,10 @@ class DeviceHealth(Base):
     __table_args__ = (
         CheckConstraint("last_sequence IS NULL OR last_sequence >= 0", name="nonnegative_sequence"),
         CheckConstraint("boot_generation >= 0", name="nonnegative_boot_generation"),
+        CheckConstraint(
+            "battery_mv IS NULL OR battery_mv BETWEEN 0 AND 10000", name="battery_range"
+        ),
+        CheckConstraint("rssi IS NULL OR rssi BETWEEN -200 AND 0", name="rssi_range"),
     )
 
     device_id: Mapped[int] = mapped_column(
@@ -313,7 +318,19 @@ class DeviceHealth(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     boot_generation: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     last_sequence: Mapped[int | None] = mapped_column(BigInteger)
+    last_event_type: Mapped[TelemetryEventType | None] = mapped_column(
+        text_enum(TelemetryEventType, "device_health_last_event_type")
+    )
+    last_device_timestamp: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     firmware: Mapped[str | None] = mapped_column(String(32))
+    battery_mv: Mapped[int | None] = mapped_column(Integer)
+    rssi: Mapped[int | None] = mapped_column(Integer)
+    status_reason: Mapped[str] = mapped_column(
+        String(160), nullable=False, server_default="seeded_health"
+    )
+    can_report_power_loss: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

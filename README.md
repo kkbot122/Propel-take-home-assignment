@@ -128,7 +128,13 @@ curl --request POST http://localhost:3000/api/telemetry \
 ```
 
 An accepted request returns HTTP 202 with generated event and correlation IDs.
-VS-03 queues the event; database state derivation begins in VS-04.
+The worker persists an immutable event, applies boot-generation and sequence
+ordering, updates device health and current pole state transactionally, and only
+then acknowledges the stream entry. Repeated event IDs are safe retries;
+repeated or lower sequences remain in the audit history without regressing state.
+After three failed deliveries, a poison entry moves to
+`propel:telemetry:dead-letter`. Meaningful state changes schedule the affected DT
+in `propel:analysis:due` with a ten-second debounce for VS-05.
 
 ## Fault simulation
 
@@ -203,8 +209,8 @@ Not included:
 
 ## Current status
 
-VS-01 through VS-03 are implemented: the Docker foundation, migrated minimum
-schema, deterministic surveyed-network seed, and validated HTTP-to-Redis
-telemetry boundary are available. Worker state derivation, localization,
-operator features, public deployment, demo video, and measured performance
-results remain to be built.
+VS-01 through VS-04 are implemented: the Docker foundation, migrated minimum
+schema, deterministic surveyed-network seed, validated HTTP-to-Redis telemetry
+boundary, and idempotent Redis-to-PostgreSQL state worker are available.
+Localization, operator features, public deployment, demo video, and measured
+performance results remain to be built.

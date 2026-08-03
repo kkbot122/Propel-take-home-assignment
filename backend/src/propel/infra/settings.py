@@ -21,6 +21,20 @@ class Settings(BaseSettings):
     telemetry_stream_name: str = Field(default="propel:telemetry", min_length=1, max_length=128)
     telemetry_request_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     telemetry_max_request_bytes: int = Field(default=16_384, ge=1_024, le=1_048_576)
+    telemetry_consumer_group: str = Field(
+        default="propel-telemetry-workers", min_length=1, max_length=128
+    )
+    telemetry_consumer_name: str = Field(default="telemetry-worker-1", min_length=1, max_length=128)
+    telemetry_consumer_batch_size: int = Field(default=50, ge=1, le=500)
+    telemetry_consumer_block_ms: int = Field(default=1_000, ge=1, le=30_000)
+    telemetry_pending_idle_ms: int = Field(default=5_000, ge=0, le=300_000)
+    telemetry_max_deliveries: int = Field(default=3, ge=1, le=100)
+    telemetry_dead_letter_stream_name: str = Field(
+        default="propel:telemetry:dead-letter", min_length=1, max_length=128
+    )
+    analysis_due_set_name: str = Field(default="propel:analysis:due", min_length=1, max_length=128)
+    analysis_debounce_seconds: float = Field(default=10.0, ge=0, le=300)
+    worker_retry_delay_seconds: float = Field(default=1.0, gt=0, le=30)
 
 
 @lru_cache

@@ -2,6 +2,32 @@
 
 Decisions are listed newest first. Dates use `YYYY-MM-DD`.
 
+## 2026-08-04 — Serialize device state and acknowledge only after durable commit
+
+**Chosen:** Use one Redis consumer group with one MVP worker and serialize each
+device through a PostgreSQL `FOR UPDATE` lock on its health cursor. Event ID is
+the delivery-idempotency key. Boot generation plus the last accepted sequence is
+the device-ordering key; every valid raw event is retained with an `accepted`,
+`duplicate`, or `stale` outcome, while only accepted evidence may change current
+state. `boot` opens a generation but does not prove restoration.
+
+The worker commits raw telemetry, device health, and pole state in one database
+transaction before `XACK`. A post-commit Redis failure therefore causes a safe
+database replay. Meaningful state changes use `ZADD GT` to schedule the DT at
+trusted receive time plus ten seconds, so replay cannot move the debounce window
+backward. Failures stay pending and become a bounded dead-letter record after
+three deliveries.
+
+**Reason:** This gives the slice auditable at-least-once processing without
+letting duplicate or out-of-order delivery regress physical state. One consumer
+matches the current throughput scope and avoids claiming unsupported cross-worker
+ordering guarantees.
+
+**Known limitation:** The sensor payload has no immutable boot-session ID. A
+delayed boot is rejected when its device timestamp does not advance the device
+cursor, but a badly skewed clock can remain ambiguous. A production protocol
+should include a firmware-generated session identifier.
+
 ## 2026-08-03 — Use a modular monolith with separate API and worker processes
 
 **Chosen:** Keep one backend codebase with explicit domain modules and run it as two long-lived processes: an HTTP API and a telemetry worker. Run the frontend, API, worker, PostgreSQL, and Redis as separate containers. Use a one-shot initialization container for migrations and deterministic seeding.
