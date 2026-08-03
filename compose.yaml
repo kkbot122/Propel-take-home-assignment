@@ -1,0 +1,109 @@
+name: propel
+
+x-backend-environment: &backend-environment
+  SERVICE_NAME: propel-backend
+  ENVIRONMENT: development
+  DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://propel:propel@database:5432/propel}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  DEPENDENCY_TIMEOUT_SECONDS: ${DEPENDENCY_TIMEOUT_SECONDS:-2}
+  DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-5}
+  DATABASE_POOL_OVERFLOW: ${DATABASE_POOL_OVERFLOW:-5}
+
+x-backend-build: &backend-build
+  context: ./backend
+  dockerfile: Dockerfile
+
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-propel}
+      POSTGRES_USER: ${POSTGRES_USER:-propel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-propel}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  init:
+    build: *backend-build
+    command: ["propel-init"]
+    environment: *backend-environment
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  backend-api:
+    build: *backend-build
+    command: ["uvicorn", "propel.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *backend-environment
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  telemetry-worker:
+    build: *backend-build
+    command: ["propel-worker"]
+    environment: *backend-environment
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-3000}:8080"
+    depends_on:
+      backend-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/nginx-health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+

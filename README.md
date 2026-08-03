@@ -74,21 +74,27 @@ flowchart LR
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design.
 
-## Planned local startup
+## Local startup
 
-The completed repository must start from a clean clone with one command:
+Start the foundation stack from a clean clone with one command:
 
 ```bash
 docker compose up --build
 ```
 
-Planned default entry points:
+Default entry points:
 
 * Operator console: `http://localhost:3000`
 * Backend health check: `http://localhost:8000/health`
 * API documentation: `http://localhost:8000/docs`
 
-These values must be updated if the implementation uses different ports.
+The startup waits for PostgreSQL and Redis, runs the one-shot initializer, and
+then starts the API, telemetry worker, and Nginx-served frontend. Stop the stack
+without deleting its named volumes with:
+
+```bash
+docker compose down
+```
 
 ## Fault simulation
 
@@ -163,4 +169,6 @@ Not included:
 
 ## Current status
 
-This document describes the intended build. Public deployment, demo-video, measured performance results, and final implementation-specific commands will be added before submission.
+VS-01, the repository and Docker foundation, is implemented. The domain model,
+telemetry pipeline, localization workflow, operator features, public deployment,
+demo video, and measured performance results remain to be built.

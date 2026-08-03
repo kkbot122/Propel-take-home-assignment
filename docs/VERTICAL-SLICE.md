@@ -53,7 +53,7 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 
 ## Progress dashboard
 
-- [ ] VS-01 — Repository and Docker foundation
+- [x] VS-01 — Repository and Docker foundation
 - [ ] VS-02 — Minimal schema, migration, and deterministic seed
 - [ ] VS-03 — Telemetry ingestion into Redis
 - [ ] VS-04 — Idempotent worker and current pole state
@@ -69,9 +69,9 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 
 ### Implementation
 
-- [ ] Create `backend/` with a `pyproject.toml` and committed `uv.lock`.
-- [ ] Create `frontend/` with React, TypeScript, Vite, and a committed `pnpm-lock.yaml`.
-- [ ] Create the backend module boundaries:
+- [x] Create `backend/` with a `pyproject.toml` and committed `uv.lock`.
+- [x] Create `frontend/` with React, TypeScript, Vite, and a committed `pnpm-lock.yaml`.
+- [x] Create the backend module boundaries:
   - `api`
   - `domain`
   - `telemetry`
@@ -80,31 +80,31 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
   - `incidents`
   - `simulator`
   - `infra`
-- [ ] Add backend and frontend Dockerfiles.
-- [ ] Add Docker Compose services:
+- [x] Add backend and frontend Dockerfiles.
+- [x] Add Docker Compose services:
   - `database`
   - `redis`
   - `init`
   - `backend-api`
   - `telemetry-worker`
   - `frontend`
-- [ ] Configure Redis append-only persistence.
-- [ ] Make `backend-api` and `telemetry-worker` wait for successful `init` completion.
-- [ ] Add `.gitignore` and `.env.example`.
-- [ ] Implement `GET /health` with PostgreSQL and Redis status.
-- [ ] Render a frontend placeholder through Nginx.
+- [x] Configure Redis append-only persistence.
+- [x] Make `backend-api` and `telemetry-worker` wait for successful `init` completion.
+- [x] Add `.gitignore` and `.env.example`.
+- [x] Implement `GET /health` with PostgreSQL and Redis status.
+- [x] Render a frontend placeholder through Nginx.
 
 ### Verification
 
-- [ ] `docker compose config` succeeds.
-- [ ] `docker compose up --build` starts without manual commands.
-- [ ] `GET /health` returns HTTP 200 and dependency status.
-- [ ] The frontend opens at `http://localhost:3000`.
-- [ ] Stopping and restarting the stack requires no repair.
+- [x] `docker compose config` succeeds.
+- [x] `docker compose up --build` starts without manual commands.
+- [x] `GET /health` returns HTTP 200 and dependency status.
+- [x] The frontend opens at `http://localhost:3000`.
+- [x] Stopping and restarting the stack requires no repair.
 
 ### Exit condition
 
-- [ ] A clean Docker startup proves the API, worker, database, Redis, initializer, and frontend deployment units are wired together.
+- [x] A clean Docker startup proves the API, worker, database, Redis, initializer, and frontend deployment units are wired together.
 
 ---
 
