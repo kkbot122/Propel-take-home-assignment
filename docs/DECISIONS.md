@@ -2,6 +2,30 @@
 
 Decisions are listed newest first. Dates use `YYYY-MM-DD`.
 
+## 2026-08-04 — Localize surveyed spans from immutable DT snapshots
+
+**Chosen:** Debounce meaningful state changes per DT for ten seconds, atomically
+claim due analysis work, and load a repeatable-read `NetworkSnapshot` containing
+one analysis time, the latest topology version, current pole observations, and
+device-health evidence. Pass that immutable value to an I/O-free surveyed-tree
+localizer. Failed snapshot or localization work is returned to the sorted set
+with a bounded retry delay.
+
+A surveyed `LIVE → DARK` edge is an `EXACT_SPAN` candidate. The candidate owns
+the dark evidence in its child subtree and includes midpoint coordinates, PIN
+code, structured positive and negative evidence, and a deterministic component
+score. Only descendant live evidence received after the dark child's onset is a
+contradiction; older heartbeats describe the pre-fault state.
+
+**Reason:** A consistent snapshot makes final localization independent of loss
+event arrival order, while the pure function can be exhaustively tested without
+PostgreSQL or Redis. Explicit provenance and score components make the result
+explainable without presenting an evidence score as a learned probability.
+
+**Boundary:** VS-05 emits and logs `FaultCandidate` values. Creating or updating
+incidents and tickets is intentionally deferred to VS-06 so localization remains
+separate from workflow persistence.
+
 ## 2026-08-04 — Serialize device state and acknowledge only after durable commit
 
 **Chosen:** Use one Redis consumer group with one MVP worker and serialize each

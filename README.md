@@ -209,8 +209,9 @@ Not included:
 
 ## Current status
 
-VS-01 through VS-04 are implemented: the Docker foundation, migrated minimum
+VS-01 through VS-05 are implemented: the Docker foundation, migrated minimum
 schema, deterministic surveyed-network seed, validated HTTP-to-Redis telemetry
-boundary, and idempotent Redis-to-PostgreSQL state worker are available.
-Localization, operator features, public deployment, demo video, and measured
-performance results remain to be built.
+boundary, idempotent Redis-to-PostgreSQL state worker, and deterministic
+surveyed-tree span localization are available. Incident and ticket persistence,
+operator features, public deployment, demo video, and measured performance
+results remain to be built.

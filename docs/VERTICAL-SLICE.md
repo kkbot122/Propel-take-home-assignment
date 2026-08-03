@@ -57,7 +57,7 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 - [x] VS-02 — Minimal schema, migration, and deterministic seed
 - [x] VS-03 — Telemetry ingestion into Redis
 - [x] VS-04 — Idempotent worker and current pole state
-- [ ] VS-05 — Surveyed-tree span localization
+- [x] VS-05 — Surveyed-tree span localization
 - [ ] VS-06 — Incident grouping and ticket workflow
 - [ ] VS-07 — Fault injection, repair, and restoration verification
 - [ ] VS-08 — Minimal operator console
@@ -276,30 +276,30 @@ def localize_known_topology(snapshot: NetworkSnapshot) -> list[FaultCandidate]:
 
 ### Implementation
 
-- [ ] Build a DT snapshot containing poles, states, state observation times, device health, and surveyed edges.
-- [ ] Wait for the 10-second correlation/debounce window.
-- [ ] Build parent and child adjacency maps.
-- [ ] Find boundaries whose upstream pole is recent `LIVE` and child is explicit `DARK`.
-- [ ] Collect the dark child's descendant subtree.
-- [ ] Count dark corroboration and post-onset live contradictions.
-- [ ] Do not treat a pre-onset heartbeat as a live descendant contradiction.
-- [ ] Produce one `SPAN_FAULT` candidate for `P-001 → P-002`.
-- [ ] Return `EXACT_SPAN`, `SURVEYED`, midpoint coordinates, PIN code, affected poles, and structured evidence.
-- [ ] Return a deterministic initial confidence score and reasons.
+- [x] Build a DT snapshot containing poles, states, state observation times, device health, and surveyed edges.
+- [x] Wait for the 10-second correlation/debounce window.
+- [x] Build parent and child adjacency maps.
+- [x] Find boundaries whose upstream pole is recent `LIVE` and child is explicit `DARK`.
+- [x] Collect the dark child's descendant subtree.
+- [x] Count dark corroboration and post-onset live contradictions.
+- [x] Do not treat a pre-onset heartbeat as a live descendant contradiction.
+- [x] Produce one `SPAN_FAULT` candidate for `P-001 → P-002`.
+- [x] Return `EXACT_SPAN`, `SURVEYED`, midpoint coordinates, PIN code, affected poles, and structured evidence.
+- [x] Return a deterministic initial confidence score and reasons.
 
 ### Focused unit tests
 
-- [ ] `LIVE → DARK → DARK` returns the expected first boundary.
-- [ ] Three downstream dark events produce one candidate.
-- [ ] `DARK → DARK` does not create another root candidate.
-- [ ] Reordering the three loss events produces the same final candidate.
-- [ ] A live descendant observed after onset is a contradiction.
-- [ ] A live heartbeat observed before onset is not a contradiction.
-- [ ] No dark poles returns no candidate.
+- [x] `LIVE → DARK → DARK` returns the expected first boundary.
+- [x] Three downstream dark events produce one candidate.
+- [x] `DARK → DARK` does not create another root candidate.
+- [x] Reordering the three loss events produces the same final candidate.
+- [x] A live descendant observed after onset is a contradiction.
+- [x] A live heartbeat observed before onset is not a contradiction.
+- [x] No dark poles returns no candidate.
 
 ### Exit condition
 
-- [ ] The hand-built surveyed tree always localizes the fixed fault to `P-001 → P-002` with exactly the expected affected set.
+- [x] The hand-built surveyed tree always localizes the fixed fault to `P-001 → P-002` with exactly the expected affected set.
 
 ---
 

@@ -235,6 +235,33 @@ Responsibilities:
 * Determine localization precision.
 * Calculate confidence and produce supporting evidence.
 
+The worker atomically claims a DT only after its Redis sorted-set due time. A
+repeatable-read PostgreSQL transaction captures one analysis timestamp and loads
+the transformer's poles, current state observation times, active devices, device
+health, and latest topology version into an immutable `NetworkSnapshot`. The pure
+localizer performs no I/O.
+
+For surveyed topology, it builds deterministic parent/child adjacency maps and
+selects edges with a recent `LIVE` parent and explicit `DARK` child. The dark
+child's subtree becomes the candidate evidence scope; dark poles become the
+affected set. A descendant `LIVE` observation is contradictory only when it was
+received after the boundary-child onset. An older live heartbeat remains
+prior-state evidence.
+
+The initial evidence score is versioned, deterministic, and bounded from 0–100:
+
+* surveyed topology: 25 points;
+* clear live-to-dark boundary: 30 points;
+* downstream dark corroboration: up to 25 points;
+* temporal coherence: up to 10 points;
+* healthy power-loss-capable sensor coverage: up to 10 points;
+* post-onset live contradictions: minus 20 points each, capped at minus 40.
+
+This score is not a probability. Each candidate includes component scores,
+positive and negative reasons, the structural subtree, observation spread,
+midpoint coordinates, PIN code, and topology provenance. Candidate persistence
+and active-incident deduplication belong to the incident service in VS-06.
+
 ### 6.7 Incident and Ticket Service
 
 Owns the operator-facing workflow.

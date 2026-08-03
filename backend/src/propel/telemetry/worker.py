@@ -1,9 +1,11 @@
 import asyncio
 import json
+import logging
 import signal
 
 from redis.exceptions import RedisError
 
+from propel.infra.analysis import PostgresDtSnapshotRepository, RedisAnalysisScheduler
 from propel.infra.dependencies import ApplicationResources
 from propel.infra.health import HealthService
 from propel.infra.settings import get_settings
@@ -48,6 +50,13 @@ async def run_worker() -> None:
             max_deliveries=settings.telemetry_max_deliveries,
             analysis_debounce_seconds=settings.analysis_debounce_seconds,
         )
+        analysis_scheduler = RedisAnalysisScheduler(
+            resources.redis,
+            PostgresDtSnapshotRepository(resources.database),
+            due_set_name=settings.analysis_due_set_name,
+            live_freshness_seconds=settings.analysis_live_freshness_seconds,
+            retry_delay_seconds=settings.analysis_retry_delay_seconds,
+        )
         await consumer.ensure_group()
         recovered_count = await consumer.recover_owned_pending_once()
         print(json.dumps({"event": "worker_ready", "status": "ok"}))
@@ -63,6 +72,7 @@ async def run_worker() -> None:
         while not stop_event.is_set():
             try:
                 await consumer.run_cycle()
+                await analysis_scheduler.run_due_once()
             except RedisError as error:
                 print(
                     json.dumps(
@@ -82,6 +92,7 @@ async def run_worker() -> None:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     asyncio.run(run_worker())
 
 

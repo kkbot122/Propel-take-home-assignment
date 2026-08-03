@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     )
     analysis_due_set_name: str = Field(default="propel:analysis:due", min_length=1, max_length=128)
     analysis_debounce_seconds: float = Field(default=10.0, ge=0, le=300)
+    analysis_live_freshness_seconds: float = Field(default=1_920, gt=0, le=86_400)
+    analysis_retry_delay_seconds: float = Field(default=5.0, gt=0, le=300)
     worker_retry_delay_seconds: float = Field(default=1.0, gt=0, le=30)
 
 
