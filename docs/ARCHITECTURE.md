@@ -276,6 +276,28 @@ Responsibilities:
 * Reject invalid transitions.
 * Coordinate restoration verification and closure.
 
+For surveyed span candidates, the active fingerprint is
+`span:{dt_id}:{parent_pole_id}->{child_pole_id}`. PostgreSQL's partial unique
+index on active fingerprints is the concurrency boundary: `INSERT ... ON
+CONFLICT` creates or refreshes one incident even when the same candidate is
+processed concurrently. A unique ticket-per-incident constraint independently
+guarantees one `DETECTED` ticket. Newly corroborated poles are added with
+idempotent incident-pole inserts; older analysis snapshots cannot replace newer
+incident evidence.
+
+The operator state machine permits only:
+
+```text
+DETECTED → ACKNOWLEDGED → CREW_ASSIGNED → RESOLVED
+```
+
+Each action locks the ticket row, validates the exact next state, updates the
+ticket, and appends a `ticket_events` row with actor, reason, timestamp, and
+action details in one transaction. `VERIFIED` and `CLOSED` are deliberately not
+operator transitions; rejection endpoints return a stable
+`AUTOMATIC_TRANSITION_ONLY` error until VS-07 supplies fresh telemetry-based
+restoration verification.
+
 ### 6.8 Operator Console
 
 Designed for a non-engineer working under time pressure.

@@ -101,6 +101,8 @@ class CandidateEvidence:
 @dataclass(frozen=True, slots=True)
 class FaultCandidate:
     dt_id: str
+    topology_version: int
+    analysis_at: datetime
     classification: FaultClass
     suspected_asset_type: SuspectedAssetType
     suspected_asset_id: str

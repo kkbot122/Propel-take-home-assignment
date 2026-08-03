@@ -8,6 +8,7 @@ from redis.exceptions import RedisError
 from propel.infra.analysis import PostgresDtSnapshotRepository, RedisAnalysisScheduler
 from propel.infra.dependencies import ApplicationResources
 from propel.infra.health import HealthService
+from propel.infra.incidents import PostgresIncidentService
 from propel.infra.settings import get_settings
 from propel.infra.telemetry_processor import PostgresTelemetryProcessor
 from propel.telemetry.consumer import RedisTelemetryConsumer
@@ -56,6 +57,7 @@ async def run_worker() -> None:
             due_set_name=settings.analysis_due_set_name,
             live_freshness_seconds=settings.analysis_live_freshness_seconds,
             retry_delay_seconds=settings.analysis_retry_delay_seconds,
+            candidate_sink=PostgresIncidentService(resources.database),
         )
         await consumer.ensure_group()
         recovered_count = await consumer.recover_owned_pending_once()

@@ -2,6 +2,26 @@
 
 Decisions are listed newest first. Dates use `YYYY-MM-DD`.
 
+## 2026-08-04 — Deduplicate active incidents and audit ticket transitions in PostgreSQL
+
+**Chosen:** Fingerprint a surveyed span candidate by DT and directed boundary,
+then use the existing partial unique index on active incident fingerprints as the
+race-safe upsert target. Candidate replay refreshes current evidence and unions
+newly corroborated affected poles. A separate unique constraint creates exactly
+one ticket per incident, and only the transaction that inserts that ticket emits
+the initial `DETECTED` audit event.
+
+Operator actions lock the ticket row and permit only `DETECTED → ACKNOWLEDGED →
+CREW_ASSIGNED → RESOLVED`. The status update and append-only `ticket_events` row
+commit together. Manual `VERIFIED` and `CLOSED` requests return a stable forbidden
+response because those states require the fresh restoration evidence implemented
+in VS-07.
+
+**Reason:** Database uniqueness remains authoritative under concurrent worker
+delivery, while the domain state machine keeps workflow rules independent of
+FastAPI and SQLAlchemy. Persisting candidate evidence before serving it gives the
+operator APIs one durable source of truth.
+
 ## 2026-08-04 — Localize surveyed spans from immutable DT snapshots
 
 **Chosen:** Debounce meaningful state changes per DT for ten seconds, atomically

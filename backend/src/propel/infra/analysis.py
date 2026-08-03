@@ -1,6 +1,6 @@
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -49,6 +49,10 @@ class UnknownDistributionTransformerError(Exception):
 
 class DtSnapshotRepository(Protocol):
     async def load(self, dt_id: str) -> NetworkSnapshot: ...
+
+
+class FaultCandidateSink(Protocol):
+    async def persist_candidates(self, candidates: Sequence[FaultCandidate]) -> object: ...
 
 
 class PostgresDtSnapshotRepository:
@@ -186,6 +190,7 @@ class RedisAnalysisScheduler:
         due_set_name: str,
         live_freshness_seconds: float,
         retry_delay_seconds: float,
+        candidate_sink: FaultCandidateSink | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._redis = redis_client
@@ -193,6 +198,7 @@ class RedisAnalysisScheduler:
         self._due_set_name = due_set_name
         self._live_freshness = timedelta(seconds=live_freshness_seconds)
         self._retry_delay_seconds = retry_delay_seconds
+        self._candidate_sink = candidate_sink
         self._clock = clock or (lambda: datetime.now(UTC))
         self._claim_script = redis_client.register_script(CLAIM_DUE_SCRIPT)
 
@@ -211,6 +217,8 @@ class RedisAnalysisScheduler:
                 snapshot,
                 live_freshness=self._live_freshness,
             )
+            if self._candidate_sink is not None and candidates:
+                await self._candidate_sink.persist_candidates(candidates)
         except Exception as error:
             retry_at = self._clock().timestamp() + self._retry_delay_seconds
             await self._redis.zadd(self._due_set_name, {dt_id: retry_at}, gt=True)

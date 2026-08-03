@@ -1,16 +1,20 @@
+import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
 import redis.asyncio as redis
+from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from propel.analysis.models import NetworkSnapshot
+from propel.api.app import create_app
 from propel.domain.enums import (
     DeviceHealthStatus,
     LocalizationPrecision,
@@ -19,8 +23,18 @@ from propel.domain.enums import (
     TopologySource,
 )
 from propel.infra.analysis import PostgresDtSnapshotRepository, RedisAnalysisScheduler
-from propel.infra.database.models import Device, DeviceHealth, Pole, PoleState, TelemetryEvent
-from propel.infra.settings import get_settings
+from propel.infra.database.models import (
+    Device,
+    DeviceHealth,
+    Incident,
+    Pole,
+    PoleState,
+    TelemetryEvent,
+    Ticket,
+    TicketEvent,
+)
+from propel.infra.incidents import PostgresIncidentService
+from propel.infra.settings import Settings, get_settings
 from propel.infra.telemetry import RedisTelemetryPublisher
 from propel.infra.telemetry_processor import PostgresTelemetryProcessor
 from propel.telemetry.consumer import RedisTelemetryConsumer
@@ -48,6 +62,7 @@ class AnalysisHarness:
     pole_ids: dict[str, int]
     device_ids: dict[str, int]
     event_ids: set[UUID] = field(default_factory=set)
+    incident_ids: set[UUID] = field(default_factory=set)
 
     async def publish(
         self,
@@ -96,6 +111,17 @@ class AnalysisHarness:
 class FailingSnapshotRepository:
     async def load(self, dt_id: str) -> NetworkSnapshot:
         raise RuntimeError(f"forced snapshot failure for {dt_id}")
+
+
+@asynccontextmanager
+async def running_operations_api(
+    settings: Settings,
+    incident_service: PostgresIncidentService,
+) -> AsyncIterator[AsyncClient]:
+    app = create_app(settings=settings, incident_service=incident_service)
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            yield client
 
 
 @pytest_asyncio.fixture
@@ -200,6 +226,13 @@ async def analysis_harness() -> AsyncIterator[AnalysisHarness]:
             harness.dead_letter_stream,
         )
         async with session_factory.begin() as session:
+            if harness.incident_ids:
+                await session.execute(
+                    delete(Ticket).where(Ticket.incident_id.in_(harness.incident_ids))
+                )
+                await session.execute(
+                    delete(Incident).where(Incident.incident_id.in_(harness.incident_ids))
+                )
             for external_id, snapshot in pole_snapshots.items():
                 await session.execute(
                     update(PoleState)
@@ -253,12 +286,14 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
 
     due_at = base + timedelta(seconds=10, milliseconds=300)
     clock = MutableClock(due_at - timedelta(milliseconds=1))
+    incident_service = PostgresIncidentService(analysis_harness.engine)
     scheduler = RedisAnalysisScheduler(
         analysis_harness.redis,
         PostgresDtSnapshotRepository(analysis_harness.engine),
         due_set_name=analysis_harness.due_set,
         live_freshness_seconds=1_920,
         retry_delay_seconds=5,
+        candidate_sink=incident_service,
         clock=clock,
     )
 
@@ -281,6 +316,133 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
     assert candidate.pin_code == "560078"
     assert candidate.confidence_score == 100
     assert await analysis_harness.redis.zscore(analysis_harness.due_set, "DT-001") is None
+
+    incident = next(
+        item
+        for item in await incident_service.list_incidents()
+        if item.fingerprint == "span:DT-001:P-001->P-002"
+    )
+    assert incident.fingerprint == "span:DT-001:P-001->P-002"
+    assert incident.suspected_asset_id == "P-001->P-002"
+    assert incident.affected_pole_ids == ("P-002", "P-003", "P-004")
+    assert incident.ticket_id is not None
+    analysis_harness.incident_ids.add(incident.incident_id)
+
+    concurrent_results = await asyncio.gather(
+        incident_service.persist_candidates(candidates),
+        incident_service.persist_candidates(candidates),
+    )
+    assert {result[0].incident_id for result in concurrent_results} == {incident.incident_id}
+    await incident_service.persist_candidates(
+        [
+            replace(
+                candidate,
+                analysis_at=candidate.analysis_at + timedelta(seconds=1),
+                confidence_score=88,
+                confidence_reason="updated corroborating evidence",
+            )
+        ]
+    )
+    updated_incident = await incident_service.get_incident(incident.incident_id)
+    assert updated_incident.confidence_score == 88
+    assert updated_incident.confidence_reason == "updated corroborating evidence"
+    assert updated_incident.affected_pole_ids == ("P-002", "P-003", "P-004")
+    session_factory = async_sessionmaker(analysis_harness.engine, expire_on_commit=False)
+    async with session_factory() as session:
+        assert (
+            await session.scalar(
+                select(func.count(Incident.incident_id)).where(
+                    Incident.fingerprint == "span:DT-001:P-001->P-002"
+                )
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count(Ticket.ticket_id)).where(
+                    Ticket.incident_id == incident.incident_id
+                )
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count(TicketEvent.id))
+                .join(Ticket)
+                .where(Ticket.incident_id == incident.incident_id)
+            )
+            == 1
+        )
+
+    settings = get_settings()
+    async with running_operations_api(settings, incident_service) as client:
+        incident_list_response = await client.get("/api/incidents")
+        incident_response = await client.get(f"/api/incidents/{incident.incident_id}")
+        ticket_response = await client.get(f"/api/tickets/{incident.ticket_id}")
+        poles_response = await client.get("/api/network/poles", params={"dt_id": "DT-001"})
+        topology_response = await client.get("/api/network/topology/DT-001")
+        skipped_response = await client.post(
+            f"/api/tickets/{incident.ticket_id}/resolve",
+            json={"actor": "operator-1", "reason": "skipped transition attempt"},
+        )
+        acknowledge_response = await client.post(
+            f"/api/tickets/{incident.ticket_id}/acknowledge",
+            json={"actor": "operator-1", "reason": "alarm reviewed"},
+        )
+        assign_response = await client.post(
+            f"/api/tickets/{incident.ticket_id}/assign",
+            json={
+                "actor": "operator-1",
+                "assigned_crew": "Crew-7",
+                "reason": "nearest crew",
+            },
+        )
+        resolve_response = await client.post(
+            f"/api/tickets/{incident.ticket_id}/resolve",
+            json={"actor": "operator-1", "reason": "repair claimed"},
+        )
+        verify_response = await client.post(
+            f"/api/tickets/{incident.ticket_id}/verify",
+            json={"actor": "operator-1"},
+        )
+        final_ticket_response = await client.get(f"/api/tickets/{incident.ticket_id}")
+
+    assert incident_list_response.status_code == 200
+    assert any(
+        item["incident_id"] == str(incident.incident_id) for item in incident_list_response.json()
+    )
+    assert incident_response.status_code == 200
+    assert incident_response.json()["affected_pole_ids"] == ["P-002", "P-003", "P-004"]
+    assert ticket_response.status_code == 200
+    assert ticket_response.json()["status"] == "DETECTED"
+    assert poles_response.status_code == 200
+    assert [pole["pole_id"] for pole in poles_response.json()] == [
+        "P-001",
+        "P-002",
+        "P-003",
+        "P-004",
+    ]
+    assert topology_response.status_code == 200
+    assert topology_response.json()["topology_version"] == 1
+    assert len(topology_response.json()["spans"]) == 4
+    assert skipped_response.status_code == 409
+    assert skipped_response.json()["error"]["code"] == "INVALID_TICKET_TRANSITION"
+    assert acknowledge_response.status_code == 200
+    assert acknowledge_response.json()["status"] == "ACKNOWLEDGED"
+    assert assign_response.status_code == 200
+    assert assign_response.json()["status"] == "CREW_ASSIGNED"
+    assert assign_response.json()["assigned_crew"] == "Crew-7"
+    assert resolve_response.status_code == 200
+    assert resolve_response.json()["status"] == "RESOLVED"
+    assert resolve_response.json()["resolution_claimed_at"] is not None
+    assert verify_response.status_code == 403
+    assert verify_response.json()["error"]["code"] == "AUTOMATIC_TRANSITION_ONLY"
+    assert [event["to_status"] for event in final_ticket_response.json()["events"]] == [
+        "DETECTED",
+        "ACKNOWLEDGED",
+        "CREW_ASSIGNED",
+        "RESOLVED",
+    ]
 
     snapshot = await PostgresDtSnapshotRepository(analysis_harness.engine).load("DT-001")
     assert isinstance(snapshot, NetworkSnapshot)

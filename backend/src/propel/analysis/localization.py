@@ -170,6 +170,8 @@ def _build_candidate(
 
     return FaultCandidate(
         dt_id=snapshot.dt_id,
+        topology_version=snapshot.topology_version,
+        analysis_at=snapshot.analysis_at,
         classification=FaultClass.SPAN_FAULT,
         suspected_asset_type=SuspectedAssetType.SPAN,
         suspected_asset_id=f"{parent.pole_id}->{child.pole_id}",

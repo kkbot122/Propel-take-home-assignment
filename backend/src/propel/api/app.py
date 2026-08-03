@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
+from propel.api.routes.incidents import router as incidents_router
 from propel.api.routes.telemetry import error_response
 from propel.api.routes.telemetry import router as telemetry_router
 from propel.api.schemas.health import DependencyStatus, HealthResponse
@@ -16,6 +17,7 @@ from propel.api.schemas.telemetry import (
 )
 from propel.infra.dependencies import ApplicationResources
 from propel.infra.health import HealthService
+from propel.infra.incidents import PostgresIncidentService
 from propel.infra.settings import Settings, get_settings
 from propel.infra.telemetry import PostgresPoleBindingResolver, RedisTelemetryPublisher
 from propel.telemetry.ingestion import TelemetryIngestionService
@@ -25,13 +27,14 @@ def create_app(
     settings: Settings | None = None,
     health_service: HealthService | None = None,
     telemetry_service: TelemetryIngestionService | None = None,
+    incident_service: PostgresIncidentService | None = None,
 ) -> FastAPI:
     application_settings = settings or get_settings()
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         resources: ApplicationResources | None = None
-        if health_service is None or telemetry_service is None:
+        if health_service is None or telemetry_service is None or incident_service is None:
             resources = ApplicationResources.create(application_settings)
 
         if health_service is None:
@@ -55,6 +58,12 @@ def create_app(
             )
         else:
             application.state.telemetry_ingestion_service = telemetry_service
+        if incident_service is None:
+            if resources is None:
+                raise RuntimeError("application resources were not created")
+            application.state.incident_service = PostgresIncidentService(resources.database)
+        else:
+            application.state.incident_service = incident_service
         application.state.telemetry_request_timeout_seconds = (
             application_settings.telemetry_request_timeout_seconds
         )
@@ -143,6 +152,7 @@ def create_app(
         )
 
     application.include_router(telemetry_router)
+    application.include_router(incidents_router)
 
     return application
 

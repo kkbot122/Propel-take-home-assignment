@@ -58,7 +58,7 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 - [x] VS-03 — Telemetry ingestion into Redis
 - [x] VS-04 — Idempotent worker and current pole state
 - [x] VS-05 — Surveyed-tree span localization
-- [ ] VS-06 — Incident grouping and ticket workflow
+- [x] VS-06 — Incident grouping and ticket workflow
 - [ ] VS-07 — Fault injection, repair, and restoration verification
 - [ ] VS-08 — Minimal operator console
 - [ ] VS-09 — End-to-end test and backbone acceptance
@@ -307,41 +307,41 @@ def localize_known_topology(snapshot: NetworkSnapshot) -> list[FaultCandidate]:
 
 ### Implementation
 
-- [ ] Fingerprint the candidate using DT and boundary edge.
-- [ ] Create one active incident for the fingerprint.
-- [ ] Store the evidence snapshot, affected poles, coordinates, PIN code, precision, and confidence.
-- [ ] Update the active incident when later corroborating telemetry arrives.
-- [ ] Create exactly one ticket in `DETECTED` for the actionable incident.
-- [ ] Implement transition endpoints:
+- [x] Fingerprint the candidate using DT and boundary edge.
+- [x] Create one active incident for the fingerprint.
+- [x] Store the evidence snapshot, affected poles, coordinates, PIN code, precision, and confidence.
+- [x] Update the active incident when later corroborating telemetry arrives.
+- [x] Create exactly one ticket in `DETECTED` for the actionable incident.
+- [x] Implement transition endpoints:
   - `DETECTED → ACKNOWLEDGED`
   - `ACKNOWLEDGED → CREW_ASSIGNED`
   - `CREW_ASSIGNED → RESOLVED`
-- [ ] Record each action in `ticket_events` with actor and timestamp.
-- [ ] Reject skipped transitions.
-- [ ] Do not expose manual `VERIFIED` or `CLOSED` transitions.
+- [x] Record each action in `ticket_events` with actor and timestamp.
+- [x] Reject skipped transitions.
+- [x] Do not expose manual `VERIFIED` or `CLOSED` transitions.
 
 ### Minimum read API
 
-- [ ] `GET /api/incidents`
-- [ ] `GET /api/incidents/{id}`
-- [ ] `GET /api/tickets/{id}`
-- [ ] `GET /api/network/poles?dt_id=DT-001`
-- [ ] `GET /api/network/topology/DT-001`
-- [ ] `POST /api/tickets/{id}/acknowledge`
-- [ ] `POST /api/tickets/{id}/assign`
-- [ ] `POST /api/tickets/{id}/resolve`
+- [x] `GET /api/incidents`
+- [x] `GET /api/incidents/{id}`
+- [x] `GET /api/tickets/{id}`
+- [x] `GET /api/network/poles?dt_id=DT-001`
+- [x] `GET /api/network/topology/DT-001`
+- [x] `POST /api/tickets/{id}/acknowledge`
+- [x] `POST /api/tickets/{id}/assign`
+- [x] `POST /api/tickets/{id}/resolve`
 
 ### Verification
 
-- [ ] Three downstream loss events create one incident and one ticket.
-- [ ] Reprocessing the candidate updates the existing incident.
-- [ ] The active fingerprint is race-safe at the database boundary.
-- [ ] Every accepted ticket action creates an audit event.
-- [ ] An attempted manual verification returns a clear error.
+- [x] Three downstream loss events create one incident and one ticket.
+- [x] Reprocessing the candidate updates the existing incident.
+- [x] The active fingerprint is race-safe at the database boundary.
+- [x] Every accepted ticket action creates an audit event.
+- [x] An attempted manual verification returns a clear error.
 
 ### Exit condition
 
-- [ ] One probable root fault always maps to one operator-facing incident and one valid ticket workflow.
+- [x] One probable root fault always maps to one operator-facing incident and one valid ticket workflow.
 
 ---
 

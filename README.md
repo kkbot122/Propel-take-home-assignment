@@ -136,6 +136,26 @@ After three failed deliveries, a poison entry moves to
 `propel:telemetry:dead-letter`. Meaningful state changes schedule the affected DT
 in `propel:analysis:due` with a ten-second debounce for VS-05.
 
+## Incident and ticket API
+
+After localization, the worker creates or updates one active incident for the
+DT and boundary fingerprint and creates one `DETECTED` ticket. The operator API
+provides:
+
+* `GET /api/incidents`
+* `GET /api/incidents/{incident_id}`
+* `GET /api/tickets/{ticket_id}`
+* `GET /api/network/poles?dt_id=DT-001`
+* `GET /api/network/topology/DT-001`
+* `POST /api/tickets/{ticket_id}/acknowledge`
+* `POST /api/tickets/{ticket_id}/assign`
+* `POST /api/tickets/{ticket_id}/resolve`
+
+Operator transitions require an `actor`; assignment also requires
+`assigned_crew`. Every accepted transition is appended to `ticket_events`.
+`VERIFIED` and `CLOSED` are automatic-only states and manual attempts return
+`AUTOMATIC_TRANSITION_ONLY`.
+
 ## Fault simulation
 
 The simulator will support:
@@ -209,9 +229,10 @@ Not included:
 
 ## Current status
 
-VS-01 through VS-05 are implemented: the Docker foundation, migrated minimum
+VS-01 through VS-06 are implemented: the Docker foundation, migrated minimum
 schema, deterministic surveyed-network seed, validated HTTP-to-Redis telemetry
 boundary, idempotent Redis-to-PostgreSQL state worker, and deterministic
-surveyed-tree span localization are available. Incident and ticket persistence,
-operator features, public deployment, demo video, and measured performance
-results remain to be built.
+surveyed-tree span localization are available. Active-incident grouping,
+audited ticket workflow, and the minimum operator read APIs are also complete.
+Fault simulation/restoration, the operator console, public deployment, demo
+video, and measured performance results remain to be built.
