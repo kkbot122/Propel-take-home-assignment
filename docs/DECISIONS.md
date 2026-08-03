@@ -176,6 +176,14 @@ The backbone seed is `SUB-001 → FDR-001 → DT-001 → P-001 → P-002 → P-0
 
 **Reason:** A fixed, minimal graph makes every later telemetry, localization, incident, and restoration test reproducible while leaving unknown-topology data generation outside the backbone slice.
 
+## 2026-08-04 — Reject telemetry identity conflicts before queueing
+
+**Chosen:** `POST /api/telemetry` trusts the supplied pole as the location claim, performs one indexed lookup for that pole's active device binding, and publishes only matching events. Unknown poles return non-retryable HTTP 404 and missing or conflicting active bindings return non-retryable HTTP 409; neither reaches Redis. An explicit future device-replacement flow must update the binding before the new device can publish for that pole.
+
+Accepted entries are flattened into the `propel:telemetry` Redis Stream with generated event and correlation IDs, the original device timestamp, and a trusted UTC receive timestamp captured before dependency I/O. Redis or identity-store failures and the two-second ingestion deadline return retryable HTTP 503. The request path performs no topology traversal, localization, or durable event mutation.
+
+**Reason:** Rejecting an unexplained identity conflict prevents one device from changing another pole's state, while a retryable dependency response lets devices distinguish temporary infrastructure failure from invalid telemetry.
+
 ## What we would do with two more weeks
 
 - Add a PostgreSQL inbox/outbox around queue publication.

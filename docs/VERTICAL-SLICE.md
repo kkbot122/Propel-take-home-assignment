@@ -55,7 +55,7 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 
 - [x] VS-01 — Repository and Docker foundation
 - [x] VS-02 — Minimal schema, migration, and deterministic seed
-- [ ] VS-03 — Telemetry ingestion into Redis
+- [x] VS-03 — Telemetry ingestion into Redis
 - [ ] VS-04 — Idempotent worker and current pole state
 - [ ] VS-05 — Surveyed-tree span localization
 - [ ] VS-06 — Incident grouping and ticket workflow
@@ -186,27 +186,27 @@ Use the assignment payload rather than a simplified slice-only contract:
 
 ### Implementation
 
-- [ ] Validate all required payload fields with Pydantic.
-- [ ] Validate event and `energized` consistency.
-- [ ] Reject unknown poles.
-- [ ] Quarantine or reject device-binding conflicts with a clear result.
-- [ ] Generate `event_id`, `correlation_id`, and trusted `received_at`.
-- [ ] Publish the normalized payload to the telemetry Redis Stream.
-- [ ] Return `202 Accepted` only after `XADD` succeeds.
-- [ ] Return a retryable error if Redis is unavailable.
-- [ ] Keep localization and PostgreSQL graph traversal out of the request path.
+- [x] Validate all required payload fields with Pydantic.
+- [x] Validate event and `energized` consistency.
+- [x] Reject unknown poles.
+- [x] Quarantine or reject device-binding conflicts with a clear result.
+- [x] Generate `event_id`, `correlation_id`, and trusted `received_at`.
+- [x] Publish the normalized payload to the telemetry Redis Stream.
+- [x] Return `202 Accepted` only after `XADD` succeeds.
+- [x] Return a retryable error if Redis is unavailable.
+- [x] Keep localization and PostgreSQL graph traversal out of the request path.
 
 ### Verification
 
-- [ ] The assignment sample payload is accepted.
-- [ ] Malformed and unknown event values return HTTP 422.
-- [ ] One accepted request produces one Redis Stream entry.
-- [ ] The response contains the generated event ID.
-- [ ] The endpoint has a bounded request timeout.
+- [x] The assignment sample payload is accepted.
+- [x] Malformed and unknown event values return HTTP 422.
+- [x] One accepted request produces one Redis Stream entry.
+- [x] The response contains the generated event ID.
+- [x] The endpoint has a bounded request timeout.
 
 ### Exit condition
 
-- [ ] Valid telemetry reliably crosses the HTTP-to-queue boundary and invalid telemetry cannot enter processing silently.
+- [x] Valid telemetry reliably crosses the HTTP-to-queue boundary and invalid telemetry cannot enter processing silently.
 
 ---
 

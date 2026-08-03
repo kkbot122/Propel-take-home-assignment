@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     dependency_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     database_pool_size: int = Field(default=5, ge=1, le=50)
     database_pool_overflow: int = Field(default=5, ge=0, le=100)
+    telemetry_stream_name: str = Field(default="propel:telemetry", min_length=1, max_length=128)
+    telemetry_request_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
+    telemetry_max_request_bytes: int = Field(default=16_384, ge=1_024, le=1_048_576)
 
 
 @lru_cache

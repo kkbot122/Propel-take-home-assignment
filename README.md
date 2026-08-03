@@ -106,6 +106,30 @@ docker compose up --build
 
 The first command permanently removes local development data.
 
+## Telemetry ingestion
+
+The seeded devices can submit telemetry through the public API or the same-origin
+Nginx proxy. For example:
+
+```bash
+curl --request POST http://localhost:3000/api/telemetry \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "device_id": "DEV-P-002",
+    "pole_id": "P-002",
+    "event": "power_lost",
+    "energized": false,
+    "ts": "2026-08-03T12:00:00Z",
+    "seq": 101,
+    "battery_mv": 3480,
+    "rssi": -91,
+    "fw": "1.4.2"
+  }'
+```
+
+An accepted request returns HTTP 202 with generated event and correlation IDs.
+VS-03 queues the event; database state derivation begins in VS-04.
+
 ## Fault simulation
 
 The simulator will support:
@@ -179,7 +203,8 @@ Not included:
 
 ## Current status
 
-VS-01 and VS-02 are implemented: the Docker foundation, migrated minimum schema,
-and deterministic surveyed-network seed are available. The telemetry pipeline,
-localization workflow, operator features, public deployment, demo video, and
-measured performance results remain to be built.
+VS-01 through VS-03 are implemented: the Docker foundation, migrated minimum
+schema, deterministic surveyed-network seed, and validated HTTP-to-Redis
+telemetry boundary are available. Worker state derivation, localization,
+operator features, public deployment, demo video, and measured performance
+results remain to be built.
