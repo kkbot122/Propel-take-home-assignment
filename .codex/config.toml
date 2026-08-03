@@ -1,0 +1,16 @@
+# Project-scoped Codex configuration. Codex loads this file only when the
+# repository is trusted.
+
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+enabled = true
+required = false
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+enabled_tools = ["resolve-library-id", "query-docs"]
+default_tools_approval_mode = "auto"
+
+# Context7 works without a key at lower limits. To use higher limits, export
+# CONTEXT7_API_KEY in the environment that launches Codex. Never commit a key.
+[mcp_servers.context7.env_http_headers]
+CONTEXT7_API_KEY = "CONTEXT7_API_KEY"

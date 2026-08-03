@@ -111,6 +111,26 @@ flowchart TD
 
 The boxes represent logical components. The implementation may run several components in the same codebase while using separate processes for the HTTP API and telemetry worker.
 
+### 5.1 Chosen implementation stack
+
+The backend is a Python 3.13 modular monolith built with FastAPI, Pydantic v2, SQLAlchemy 2.x, Psycopg 3, Alembic, and the asyncio Redis client from `redis-py`. NetworkX constructs and validates inferred trees; the localization and classification rules themselves are pure Python functions over immutable snapshots.
+
+The operator console is a React 19 and TypeScript single-page application built with Vite. TanStack Query owns server state and polls every five seconds. React Leaflet renders the network and incidents over a configurable OpenStreetMap tile layer. Polling is intentionally preferred to WebSockets for the MVP because it is operationally simpler and comfortably inside the 120-second product target.
+
+PostgreSQL 17 is the only persistent source of truth. Redis 7.4 Streams buffers telemetry and a Redis sorted set debounces DT analysis. Docker Compose is the local runtime. The public deployment target is Railway using the same repository Dockerfiles and private service networking.
+
+The logical boxes above are not independent microservices. The long-lived deployment units are:
+
+```text
+frontend          Nginx serving the built SPA and proxying same-origin API requests
+backend-api       FastAPI HTTP process
+telemetry-worker  stream consumer, stale-state scan, analysis scheduler, and verifier
+redis             transient queue and debounce state
+database          durable system of record
+```
+
+A one-shot `init` container runs Alembic migrations and idempotent deterministic seeding before the API and worker start. The API and worker use the same backend image with different commands.
+
 ## 6. Component responsibilities
 
 ### 6.1 Telemetry Ingestion API
@@ -159,6 +179,8 @@ Processing sequence:
 
 Device timestamps are not used as the sole ordering mechanism because clocks may be skewed. The per-device sequence number and server receive time are the main ordering signals.
 
+The first deployment runs one telemetry consumer. This preserves a simple receive-order path while the per-device boot and sequence rules are proven. Database row locking and idempotency still protect retries. Scaling to multiple consumers requires partitioning by device or DT, or retaining the same per-device serialization guarantee.
+
 ### 6.4 Pole State Store
 
 Stores the derived current state used by localization.
@@ -175,6 +197,8 @@ A state record includes the last accepted event, device sequence, device timesta
 
 The localization processor reads this derived state instead of replaying the entire telemetry history on every event.
 
+A `LIVE` state is always interpreted with its observation time. A heartbeat received before an incident began is prior-state evidence, not proof that a descendant remained energized after the incident. Only a live observation received after the candidate onset can contradict a dark upstream boundary. This prevents a missed `power_lost` message or silent firmware-1.2 device from looking like a physically impossible live descendant.
+
 ### 6.5 Network Topology Registry
 
 Stores substations, feeders, transformers, poles, and topology edges.
@@ -182,16 +206,15 @@ Stores substations, feeders, transformers, poles, and topology edges.
 All topology is exposed through one edge model:
 
 ```text
-parent pole → child pole
+DT or parent pole → child pole
 ```
 
-Each edge records its provenance:
+Each stored edge records its provenance:
 
 * `SURVEYED` — directly supplied by the registry
 * `INFERRED` — generated from geography
-* `UNKNOWN` — no defensible edge could be produced
 
-Each inferred edge includes a confidence score. This allows the same localization engine to operate on recorded and inferred topology while preserving uncertainty.
+Each inferred edge includes a confidence score. If no defensible graph can be produced, the DT topology is marked unavailable or unusable and no artificial `UNKNOWN` edge is stored. This allows the same localization engine to operate on recorded and inferred topology while preserving uncertainty.
 
 ### 6.6 Fault Localization Processor
 
@@ -278,22 +301,35 @@ An operator action alone cannot produce `VERIFIED` or `CLOSED`.
 * latitude and longitude
 * `dt_id`
 * `feeder_id`
-* nullable `seq_on_line`
-* nullable `parent_pole_id`
 * nullable `pincode`
-* nullable `device_id`
 * `pole_type`
 * `ward`
+
+The registry's nullable `seq_on_line`, `parent_pole_id`, and `device_id` values are retained as import evidence but are not the canonical topology or device relationship.
 
 ### Device
 
 * `device_id`
-* current `pole_id`
-* firmware version
+* first-seen timestamp
+* nullable retired timestamp
+
+Devices are separate from poles because a physical device may be replaced while the pole identity remains stable. Assignment history is stored in a time-bounded `DeviceBinding`; only one active binding may exist for a device and for a pole. The registry's `device_id` column is treated as the initial binding rather than duplicated permanently on both records.
+
+### DeviceBinding
+
+* `device_id`
+* `pole_id`
+* valid-from timestamp
+* nullable valid-to timestamp
+
+### DeviceHealth
+
+* `device_id`
+* current boot generation
+* firmware version and power-loss capability
 * latest battery and RSSI values
 * last-seen timestamp
-
-Devices are separate from poles because a physical device may be replaced while the pole identity remains stable.
+* health status and reason
 
 ### TelemetryEvent
 
@@ -326,11 +362,13 @@ Derived current state:
 ### TopologyEdge
 
 * `dt_id`
-* `parent_pole_id`
+* nullable `parent_pole_id`; `NULL` means the DT is the parent
 * `child_pole_id`
 * source: surveyed or inferred
 * confidence
 * inference metadata
+
+Each topology version permits at most one parent edge per child. Parent and child poles must belong to the edge's DT.
 
 ### ScheduledOutage
 
@@ -406,6 +444,8 @@ A pole-state change first triggers analysis for its distribution transformer. Th
 
 This bounds normal processing to a small subgraph rather than scanning all poles.
 
+Accepted state changes reset a DT's due time in a Redis sorted set. The analyzer claims the DT after the correlation window expires, then reads topology, pole state, device health, active schedules, and active incidents inside one PostgreSQL repeatable-read transaction. The initial correlation window is 10 seconds.
+
 ### 9.2 Recorded topology
 
 For a transformer with surveyed parent relationships:
@@ -414,7 +454,7 @@ For a transformer with surveyed parent relationships:
 2. Find dark poles whose parent is live.
 3. Treat each live-parent/dark-child edge as a candidate fault boundary.
 4. Collect the observable dark descendants below each candidate.
-5. Remove candidates contradicted by live descendants that cannot be explained by missing sensors or stale state.
+5. Remove candidates contradicted by descendants with fresh live evidence received after candidate onset and which cannot be explained by ordering or identity anomalies.
 6. Merge duplicate observations referring to the same boundary.
 7. Produce one incident per defensible boundary.
 
@@ -544,11 +584,30 @@ Confidence is deterministic and explainable. It combines:
 
 Suggested presentation:
 
-* `HIGH` — surveyed boundary with strong downstream agreement and no material contradiction
-* `MEDIUM` — inferred boundary or incomplete telemetry with adequate corroboration
-* `LOW` — only DT-level or corridor localization is defensible
+* `HIGH` — strong corroboration with no material contradiction
+* `MEDIUM` — adequate but incomplete or partly inferred evidence
+* `LOW` — weak, sparse, or materially contradictory evidence
 
 The API should return both a normalized score and a list of reasons. The UI should emphasize the level and plain-language reason rather than only a percentage.
+
+Confidence and precision remain independent: the system can be highly confident that a DT failed while only reporting `DT_LEVEL` precision. Initial score bands are `HIGH >= 80`, `MEDIUM 50–79`, and `LOW < 50`. An inferred span is capped below `HIGH`; a corridor may still have strong evidence that an outage exists, but cannot be relabelled as an exact span.
+
+### 12.1 Initial deterministic rule defaults
+
+These values are configuration, are covered by fixed-snapshot tests, and must be tuned only from recorded simulator results:
+
+| Rule | Initial default |
+| --- | --- |
+| DT correlation/debounce window | 10 seconds |
+| Pole becomes `STALE` | No accepted event for 32 minutes |
+| Minimum span corroboration | Dark boundary child plus one dark eligible descendant, or a terminal boundary child |
+| DT-wide outage | At least 60% of recently healthy eligible poles dark across at least two branches, with no lower boundary explaining the pattern |
+| Feeder outage | At least 60% of the feeder's DTs have DT-wide evidence, with a minimum of two DTs, inside the same correlation window |
+| Scheduled-outage grace | 10 minutes early and 40 minutes late |
+| Restoration verification | At least 80% of the frozen eligible set reports fresh `LIVE`, the boundary child is live, and no member reports fresh `DARK` after the repair claim |
+| Restoration stabilization | 10 seconds |
+
+Eligible poles exclude `NO_DEVICE`, already-offline devices, and devices without sufficiently recent pre-incident evidence. Firmware 1.2 devices and missing dying messages reduce coverage; their silence never counts as confirmed darkness. Small terminal branches are allowed to form a candidate from a single explicit dark boundary child, but receive a confidence penalty and may remain `UNCONFIRMED_OUTAGE` until corroborated.
 
 ## 13. Scheduled-outage handling
 
@@ -682,13 +741,18 @@ No performance target will be claimed until it is measured against a documented 
 ## 20. Reliability and failure handling
 
 * Queue processing uses acknowledgement and bounded retries.
+* The API returns `202 Accepted` only after Redis accepts the event with `XADD`.
+* Redis append-only persistence is enabled in the Docker Compose stack.
 * Poison events move to a dead-letter path with a reason.
 * Raw events remain immutable for debugging.
 * Pole state updates are idempotent.
+* The worker acknowledges a stream entry only after its PostgreSQL transaction commits.
 * Localization and ticket creation use idempotency keys to avoid duplicate incidents.
 * Dependency health is exposed through `/health`.
 * The UI shows stale data and degraded dependencies instead of silently appearing healthy.
 * Simulator traffic is marked so it cannot be confused with production traffic.
+
+Redis persistence is sufficient for the assignment's measured burst and restart tests, but it is not claimed as a zero-loss production boundary. A production version would add a PostgreSQL inbox/outbox or consume the department's durable MQTT broker directly before acknowledging receipt.
 
 ## 21. Testing strategy
 
@@ -718,6 +782,7 @@ backend-api
 telemetry-worker
 redis
 database
+init (one-shot migration and seed job)
 ```
 
 The stack must initialize its schema and seed a usable synthetic network automatically. A reviewer should see active network data immediately after startup without running a separate migration or seed command.
