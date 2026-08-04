@@ -463,9 +463,12 @@ The vertical slice is complete only when every statement below is true:
 - [x] The complete scenario is operable from the UI.
 - [x] The focused automated test suite passes.
 
-When this gate passes, update the progress dashboard at the top and resume the full backlog in [`tasks.md`](tasks.md).
+This gate has passed. Continue with [`POST-BACKBONE.md`](POST-BACKBONE.md) as the ordered delivery plan and use [`tasks.md`](tasks.md) as the full supporting backlog.
 
-## Deferred until after the backbone
+## Post-backbone continuation
+
+The following sequence is expanded into PB-01 through PB-10 in
+[`POST-BACKBONE.md`](POST-BACKBONE.md):
 
 Resume these in this order after the exit gate:
 

@@ -15,7 +15,7 @@ Optimize in this order:
 5. Operator clarity
 6. Performance supported by measurement
 
-Use [`docs/VERTICAL-SLICE.md`](docs/VERTICAL-SLICE.md) as the execution plan until its backbone exit gate passes. Use [`docs/tasks.md`](docs/tasks.md) as the full backlog afterward. Architectural decisions and invariants live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/DECISIONS.md`](docs/DECISIONS.md).
+Use [`docs/VERTICAL-SLICE.md`](docs/VERTICAL-SLICE.md) through its backbone exit gate. After that gate passes, execute [`docs/POST-BACKBONE.md`](docs/POST-BACKBONE.md) in PB order and use [`docs/tasks.md`](docs/tasks.md) as the complete supporting backlog. Architectural decisions and invariants live in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Use Context7 for dependency knowledge
 

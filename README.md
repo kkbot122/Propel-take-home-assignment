@@ -228,6 +228,7 @@ The final repository will contain:
 * `DECISIONS.md` — assumptions and technical decisions
 * `AI-WORKFLOW.md` — AI tools used and validation process
 * `docs/VERTICAL-SLICE.md` — the ordered backbone tracker to complete before the full backlog
+* `docs/POST-BACKBONE.md` — PB-01 through PB-10 in delivery order with exit gates
 * `docs/ACCEPTANCE.md` — the recorded backbone acceptance evidence and timings
 * `AGENTS.md` — repository-wide coding standards and quality gates used by Codex
 

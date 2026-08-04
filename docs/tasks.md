@@ -2,7 +2,7 @@
 
 This task list is ordered as a build plan. Each task is intentionally small, independently testable, and tied to a visible output.
 
-> **Execution note:** This is the complete backlog. Until the first end-to-end backbone passes, work from [`VERTICAL-SLICE.md`](VERTICAL-SLICE.md) instead of completing this file sequentially.
+> **Execution note:** This is the complete backlog. The backbone in [`VERTICAL-SLICE.md`](VERTICAL-SLICE.md) has passed; execute the remaining work in the PB order defined by [`POST-BACKBONE.md`](POST-BACKBONE.md), using this file for the supporting task detail.
 
 ## Working rules
 
