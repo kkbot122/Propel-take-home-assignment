@@ -17,9 +17,12 @@ from propel.analysis.models import NetworkSnapshot
 from propel.api.app import create_app
 from propel.domain.enums import (
     DeviceHealthStatus,
+    IncidentStatus,
     LocalizationPrecision,
     PoleStatus,
+    SimulatorFaultStatus,
     TelemetryEventType,
+    TelemetryOrigin,
     TopologySource,
 )
 from propel.infra.analysis import PostgresDtSnapshotRepository, RedisAnalysisScheduler
@@ -29,16 +32,26 @@ from propel.infra.database.models import (
     Incident,
     Pole,
     PoleState,
+    SimulatedFault,
     TelemetryEvent,
     Ticket,
     TicketEvent,
 )
 from propel.infra.incidents import PostgresIncidentService
 from propel.infra.settings import Settings, get_settings
-from propel.infra.telemetry import RedisTelemetryPublisher
+from propel.infra.simulator import PostgresSimulatorService
+from propel.infra.telemetry import (
+    PostgresPoleBindingResolver,
+    RedisTelemetryPublisher,
+)
 from propel.infra.telemetry_processor import PostgresTelemetryProcessor
+from propel.simulator.models import SimulatorEmissionReceipt
 from propel.telemetry.consumer import RedisTelemetryConsumer
-from propel.telemetry.ingestion import TelemetryCommand, TelemetryEnvelope
+from propel.telemetry.ingestion import (
+    TelemetryCommand,
+    TelemetryEnvelope,
+    TelemetryIngestionService,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -63,6 +76,7 @@ class AnalysisHarness:
     device_ids: dict[str, int]
     event_ids: set[UUID] = field(default_factory=set)
     incident_ids: set[UUID] = field(default_factory=set)
+    simulated_fault_ids: set[UUID] = field(default_factory=set)
 
     async def publish(
         self,
@@ -111,6 +125,42 @@ class AnalysisHarness:
 class FailingSnapshotRepository:
     async def load(self, dt_id: str) -> NetworkSnapshot:
         raise RuntimeError(f"forced snapshot failure for {dt_id}")
+
+
+class AsgiSimulatorTelemetryGateway:
+    def __init__(self) -> None:
+        self.app = None
+
+    async def emit(self, command: TelemetryCommand) -> SimulatorEmissionReceipt:
+        if self.app is None:
+            raise RuntimeError("ASGI simulator gateway has not been attached")
+        async with AsyncClient(
+            transport=ASGITransport(app=self.app), base_url="http://simulator-loopback"
+        ) as client:
+            response = await client.post(
+                "/api/telemetry",
+                json={
+                    "device_id": command.device_id,
+                    "pole_id": command.pole_id,
+                    "event": command.event.value,
+                    "energized": command.energized,
+                    "ts": command.device_timestamp.isoformat(),
+                    "seq": command.sequence,
+                    "battery_mv": command.battery_mv,
+                    "rssi": command.rssi,
+                    "fw": command.firmware,
+                },
+                headers={"x-propel-telemetry-origin": "simulator"},
+            )
+        assert response.status_code == 202
+        payload = response.json()
+        return SimulatorEmissionReceipt(
+            event_id=UUID(payload["event_id"]),
+            received_at=datetime.fromisoformat(payload["received_at"]),
+        )
+
+    async def close(self) -> None:
+        pass
 
 
 @asynccontextmanager
@@ -226,6 +276,12 @@ async def analysis_harness() -> AsyncIterator[AnalysisHarness]:
             harness.dead_letter_stream,
         )
         async with session_factory.begin() as session:
+            if harness.simulated_fault_ids:
+                await session.execute(
+                    delete(SimulatedFault).where(
+                        SimulatedFault.fault_id.in_(harness.simulated_fault_ids)
+                    )
+                )
             if harness.incident_ids:
                 await session.execute(
                     delete(Ticket).where(Ticket.incident_id.in_(harness.incident_ids))
@@ -352,7 +408,8 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
         assert (
             await session.scalar(
                 select(func.count(Incident.incident_id)).where(
-                    Incident.fingerprint == "span:DT-001:P-001->P-002"
+                    Incident.fingerprint == "span:DT-001:P-001->P-002",
+                    Incident.status == IncidentStatus.ACTIVE,
                 )
             )
             == 1
@@ -479,3 +536,146 @@ async def test_failed_analysis_is_rescheduled_without_losing_the_dt(
     assert await analysis_harness.redis.zscore(analysis_harness.due_set, "DT-001") == pytest.approx(
         (now + timedelta(seconds=5)).timestamp()
     )
+
+
+@pytest.mark.asyncio
+async def test_simulator_fault_repair_is_verified_through_public_telemetry(
+    analysis_harness: AnalysisHarness,
+) -> None:
+    base = datetime.now(UTC)
+    clock = MutableClock(base)
+    ingestion = TelemetryIngestionService(
+        PostgresPoleBindingResolver(analysis_harness.engine),
+        RedisTelemetryPublisher(analysis_harness.redis, analysis_harness.stream),
+        clock=clock,
+    )
+    gateway = AsgiSimulatorTelemetryGateway()
+    simulator = PostgresSimulatorService(analysis_harness.engine, gateway, clock=clock)
+    incidents = PostgresIncidentService(analysis_harness.engine, clock=clock)
+    settings = get_settings()
+    app = create_app(
+        settings=settings,
+        telemetry_service=ingestion,
+        incident_service=incidents,
+        simulator_service=simulator,
+    )
+    gateway.app = app
+    consumer = analysis_harness.consumer()
+    await consumer.ensure_group()
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            inject_response = await client.post("/api/simulator/faults", json={})
+            assert inject_response.status_code == 201, inject_response.json()
+            injected = inject_response.json()
+            fault_id = UUID(injected["fault_id"])
+            analysis_harness.simulated_fault_ids.add(fault_id)
+            analysis_harness.event_ids.update(UUID(item) for item in injected["emitted_event_ids"])
+            assert injected["status"] == SimulatorFaultStatus.ACTIVE
+            assert injected["deenergized_pole_ids"] == ["P-002", "P-003", "P-004"]
+            assert await consumer.consume_new_once() == 4
+
+            clock.value = base + timedelta(seconds=11)
+            scheduler = RedisAnalysisScheduler(
+                analysis_harness.redis,
+                PostgresDtSnapshotRepository(analysis_harness.engine),
+                due_set_name=analysis_harness.due_set,
+                live_freshness_seconds=1_920,
+                retry_delay_seconds=5,
+                candidate_sink=incidents,
+                clock=clock,
+            )
+            candidates = await scheduler.run_due_once()
+            assert len(candidates) == 1
+            incident = next(
+                item
+                for item in await incidents.list_incidents()
+                if item.fingerprint == "span:DT-001:P-001->P-002"
+            )
+            assert incident.ticket_id is not None
+            analysis_harness.incident_ids.add(incident.incident_id)
+
+            await client.post(
+                f"/api/tickets/{incident.ticket_id}/acknowledge",
+                json={"actor": "operator-1"},
+            )
+            await client.post(
+                f"/api/tickets/{incident.ticket_id}/assign",
+                json={"actor": "operator-1", "assigned_crew": "Crew-7"},
+            )
+            clock.value = base + timedelta(seconds=12)
+            resolve_response = await client.post(
+                f"/api/tickets/{incident.ticket_id}/resolve",
+                json={"actor": "operator-1", "reason": "repair claimed"},
+            )
+            assert resolve_response.status_code == 200
+            assert resolve_response.json()["restoration_status"] == "REPAIR_NOT_VERIFIED"
+            assert resolve_response.json()["remaining_dark_count"] == 3
+
+            clock.value = base + timedelta(seconds=30)
+            assert (
+                await incidents.verify_restorations_once(threshold=0.8, stabilization_seconds=10)
+                == 0
+            )
+            assert (await incidents.get_ticket(incident.ticket_id)).status.value == "RESOLVED"
+
+            clock.value = base + timedelta(seconds=31)
+            repair_response = await client.post(f"/api/simulator/faults/{fault_id}/repair")
+            assert repair_response.status_code == 200
+            repaired = repair_response.json()
+            assert repaired["status"] == SimulatorFaultStatus.REPAIRED
+            assert len(repaired["emitted_event_ids"]) == 6
+            analysis_harness.event_ids.update(UUID(item) for item in repaired["emitted_event_ids"])
+            assert await consumer.consume_new_once() == 6
+
+            session_factory = async_sessionmaker(analysis_harness.engine, expire_on_commit=False)
+            async with session_factory() as session:
+                states = tuple(
+                    await session.scalars(
+                        select(PoleState.state)
+                        .join(Pole, Pole.id == PoleState.pole_id)
+                        .where(Pole.pole_id.in_(("P-002", "P-003", "P-004")))
+                        .order_by(Pole.pole_id)
+                    )
+                )
+                simulator_event_count = await session.scalar(
+                    select(func.count(TelemetryEvent.id)).where(
+                        TelemetryEvent.event_id.in_(analysis_harness.event_ids),
+                        TelemetryEvent.origin == TelemetryOrigin.SIMULATOR,
+                    )
+                )
+            assert states == (PoleStatus.LIVE, PoleStatus.LIVE, PoleStatus.LIVE)
+            assert simulator_event_count == 10
+
+            clock.value = base + timedelta(seconds=40)
+            assert (
+                await incidents.verify_restorations_once(threshold=0.8, stabilization_seconds=10)
+                == 0
+            )
+            clock.value = base + timedelta(seconds=41)
+            assert (
+                await incidents.verify_restorations_once(threshold=0.8, stabilization_seconds=10)
+                == 1
+            )
+            ticket = await incidents.get_ticket(incident.ticket_id)
+            assert ticket.status.value == "CLOSED"
+            assert ticket.restoration_status == "RESTORATION_VERIFIED"
+            assert [event.to_status.value for event in ticket.events][-2:] == [
+                "VERIFIED",
+                "CLOSED",
+            ]
+
+            repeated_repair = await client.post(f"/api/simulator/faults/{fault_id}/repair")
+            assert repeated_repair.status_code == 200
+            assert repeated_repair.json()["emitted_event_ids"] == []
+            assert (
+                await incidents.verify_restorations_once(threshold=0.8, stabilization_seconds=10)
+                == 0
+            )
+            final_ticket = await incidents.get_ticket(incident.ticket_id)
+            assert [event.to_status.value for event in final_ticket.events].count("VERIFIED") == 1
+            assert [event.to_status.value for event in final_ticket.events].count("CLOSED") == 1
+
+            reset_response = await client.post("/api/simulator/reset")
+            assert reset_response.status_code == 200
+            assert reset_response.json() == {"status": "reset", "repaired_faults": []}

@@ -80,6 +80,7 @@ async def test_valid_telemetry_crosses_http_to_redis_boundary(redis_client: Redi
         "battery_mv": "3480",
         "rssi": "-91",
         "fw": "1.4.2",
+        "origin": "DEVICE",
     }
     assert unknown_response.status_code == 404
     assert unknown_response.json()["error"]["code"] == "UNKNOWN_POLE"

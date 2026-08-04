@@ -88,6 +88,8 @@ class TicketResponse(BaseModel):
     resolution_claimed_at: datetime | None
     verified_at: datetime | None
     closed_at: datetime | None
+    restoration_status: str | None
+    remaining_dark_count: Annotated[int | None, Field(ge=0)]
     events: list[TicketEventResponse]
 
 

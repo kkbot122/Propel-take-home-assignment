@@ -12,6 +12,7 @@ from propel.api.schemas.telemetry import (
     TelemetryRequest,
     ValidationErrorResponse,
 )
+from propel.domain.enums import TelemetryOrigin
 from propel.telemetry.ingestion import (
     DeviceBindingConflictError,
     IdentityLookupUnavailableError,
@@ -63,7 +64,12 @@ async def ingest_telemetry(
     timeout_seconds: float = request.app.state.telemetry_request_timeout_seconds
     try:
         async with asyncio.timeout(timeout_seconds):
-            receipt = await service.ingest(payload.to_command())
+            origin = (
+                TelemetryOrigin.SIMULATOR
+                if request.headers.get("x-propel-telemetry-origin") == "simulator"
+                else TelemetryOrigin.DEVICE
+            )
+            receipt = await service.ingest(payload.to_command(), origin=origin)
     except UnknownPoleError:
         log_ingestion_outcome("unknown_pole", payload)
         return error_response(

@@ -886,40 +886,40 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 15.1 Capture the expected restoration set
 
-- [ ] Store the incident's affected observable poles.
-- [ ] Record which poles had no device or were already unhealthy.
-- [ ] Freeze or version the restoration expectation when repair is claimed.
-- [ ] Test: expected restoration set does not include `NO_DEVICE` poles as mandatory evidence.
+- [x] Store the incident's affected observable poles.
+- [x] Record which poles had no device or were already unhealthy.
+- [x] Freeze or version the restoration expectation when repair is claimed.
+- [x] Test: expected restoration set does not include `NO_DEVICE` poles as mandatory evidence.
 
 ## 15.2 Process restoration telemetry
 
-- [ ] Reuse the normal telemetry pipeline.
-- [ ] Update states on `boot` and `power_restored`.
-- [ ] Require fresh evidence after the incident.
-- [ ] Prevent old delayed restoration events from verifying a current incident.
-- [ ] Test: stale restoration data cannot close a ticket.
+- [x] Reuse the normal telemetry pipeline.
+- [x] Update states on `boot` and `power_restored`.
+- [x] Require fresh evidence after the incident.
+- [x] Prevent old delayed restoration events from verifying a current incident.
+- [x] Test: stale restoration data cannot close a ticket.
 
 ## 15.3 Decide restoration success
 
-- [ ] Define the minimum share of eligible affected poles that must return live.
-- [ ] Require no critical boundary contradiction.
-- [ ] Allow a short stabilization window.
-- [ ] Move `RESOLVED → VERIFIED → CLOSED` automatically when criteria pass.
-- [ ] Test: repaired fault closes automatically.
+- [x] Define the minimum share of eligible affected poles that must return live.
+- [x] Require no critical boundary contradiction.
+- [x] Allow a short stabilization window.
+- [x] Move `RESOLVED → VERIFIED → CLOSED` automatically when criteria pass.
+- [x] Test: repaired fault closes automatically.
 
 ## 15.4 Handle failed repair claims
 
-- [ ] Keep ticket open when affected poles remain dark.
-- [ ] Show `REPAIR_NOT_VERIFIED` as a derived status or warning.
-- [ ] Display the count of poles still dark.
-- [ ] Test: marking resolved while poles are dark does not close the ticket.
+- [x] Keep ticket open when affected poles remain dark.
+- [x] Show `REPAIR_NOT_VERIFIED` as a derived status or warning.
+- [x] Display the count of poles still dark.
+- [x] Test: marking resolved while poles are dark does not close the ticket.
 
 ## 15.5 Handle partial restoration
 
-- [ ] Recalculate the remaining affected set.
-- [ ] Decide whether the original incident remains open or a new downstream fault is visible.
-- [ ] Record the chosen behaviour in `DECISIONS.md`.
-- [ ] Test: partial restoration produces a clear operator message.
+- [x] Recalculate the remaining affected set.
+- [x] Decide whether the original incident remains open or a new downstream fault is visible.
+- [x] Record the chosen behaviour in `DECISIONS.md`.
+- [x] Test: partial restoration produces a clear operator message.
 
 ---
 
@@ -954,19 +954,19 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 17.1 Create simulator state
 
-- [ ] Keep simulator ground truth separate from production state.
-- [ ] Track active simulated faults.
+- [x] Keep simulator ground truth separate from production state.
+- [x] Track active simulated faults.
 - [ ] Track actual energization of every pole.
 - [ ] Test: simulator can report the actual fault without exposing it to localization.
 
 ## 17.2 Inject a span fault
 
 - [ ] Select one topology edge.
-- [ ] Mark every downstream pole physically de-energized.
-- [ ] Generate realistic telemetry from affected devices.
+- [x] Mark every downstream pole physically de-energized.
+- [x] Generate realistic telemetry from affected devices.
 - [ ] Drop approximately 30% of dying messages.
 - [ ] Make firmware 1.2 devices go silent.
-- [ ] Test: a known span fault results in one localized incident.
+- [x] Test: a known span fault results in one localized incident.
 
 ## 17.3 Inject a DT fault
 
@@ -1007,18 +1007,18 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 17.9 Repair faults
 
-- [ ] Restore physical energization.
-- [ ] Generate `boot` and `power_restored`.
-- [ ] Respect realistic restoration timing.
-- [ ] Test: repair causes automatic verification and closure.
+- [x] Restore physical energization.
+- [x] Generate `boot` and `power_restored`.
+- [x] Respect realistic restoration timing.
+- [x] Test: repair causes automatic verification and closure.
 
 ## 17.10 Add simulator API
 
 - [ ] List valid fault targets.
-- [ ] Inject fault.
+- [x] Inject fault.
 - [ ] Inject noise.
-- [ ] Repair fault.
-- [ ] Reset simulation.
+- [x] Repair fault.
+- [x] Reset simulation.
 - [ ] Return simulation ID and hidden ground-truth reference for evaluation.
 - [ ] Test each endpoint.
 

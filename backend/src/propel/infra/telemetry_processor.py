@@ -101,6 +101,7 @@ class PostgresTelemetryProcessor:
                     rssi=envelope.command.rssi,
                     firmware=envelope.command.firmware,
                     processing_outcome=decision.outcome,
+                    origin=envelope.origin,
                     state_changed=state_changed,
                     raw_payload=dict(fields),
                 )

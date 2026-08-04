@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from uuid import UUID
 
-from propel.domain.enums import TelemetryEventType
+from propel.domain.enums import TelemetryEventType, TelemetryOrigin
 from propel.telemetry.ingestion import TelemetryCommand, TelemetryEnvelope
 
 EXTERNAL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -68,6 +68,7 @@ def parse_stream_message(fields: Mapping[str, str]) -> TelemetryEnvelope:
         event_id = UUID(fields["event_id"])
         correlation_id = UUID(fields["correlation_id"])
         event_type = TelemetryEventType(fields["event"])
+        origin = TelemetryOrigin(fields.get("origin", TelemetryOrigin.DEVICE.value))
     except ValueError as error:
         raise InvalidStreamMessageError("invalid_identifier_or_event") from error
 
@@ -84,6 +85,7 @@ def parse_stream_message(fields: Mapping[str, str]) -> TelemetryEnvelope:
         event_id=event_id,
         correlation_id=correlation_id,
         received_at=parse_datetime(fields["received_at"], "received_at"),
+        origin=origin,
         command=TelemetryCommand(
             device_id=device_id,
             pole_id=pole_id,

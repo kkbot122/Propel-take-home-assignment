@@ -68,6 +68,7 @@ class RedisTelemetryPublisher:
             "battery_mv": str(command.battery_mv),
             "rssi": str(command.rssi),
             "fw": command.firmware,
+            "origin": envelope.origin.value,
         }
         try:
             stream_id = await self._redis.xadd(self._stream_name, fields)

@@ -67,6 +67,8 @@ class TicketView:
     resolution_claimed_at: datetime | None
     verified_at: datetime | None
     closed_at: datetime | None
+    restoration_status: str | None
+    remaining_dark_count: int | None
     events: tuple[TicketEventView, ...]
 
 

@@ -254,6 +254,31 @@ Accepted entries are flattened into the `propel:telemetry` Redis Stream with gen
 
 **Reason:** Rejecting an unexplained identity conflict prevents one device from changing another pole's state, while a retryable dependency response lets devices distinguish temporary infrastructure failure from invalid telemetry.
 
+## 2026-08-04 — Keep simulator ground truth out of localization
+
+**Chosen:** The fixed span simulator stores its active physical fault and the
+downstream de-energized pole IDs in `simulated_faults`. It emits an upstream
+heartbeat and downstream loss events by calling the public `POST /api/telemetry`
+contract over HTTP. Repair emits `boot` and then `power_restored` for each
+affected device through the same endpoint. An `origin` marker is persisted for
+diagnostics, but ordering, state derivation, analysis, and incident handling are
+identical to device telemetry. `reset` repairs all active faults and preserves
+incident and ticket history rather than deleting audit records.
+Fault state commits before injection telemetry is emitted; a transient HTTP
+failure leaves the incomplete active fault retryable, and sequence handling
+makes partially repeated emissions harmless.
+
+When a ticket enters `RESOLVED`, `ticket_restoration_poles` freezes all affected
+poles with eligibility, exclusion reason, and boundary-child identity. The
+worker checks row-locked `RESOLVED` tickets on every cycle. Evidence must be
+newer than `resolution_claimed_at`; the boundary child and 80% of eligible poles
+must be `LIVE` for 10 seconds. One transaction appends `VERIFIED` and `CLOSED`,
+so concurrent cycles and repeated repair calls cannot duplicate closure.
+
+**Rejected:** Reading simulator state during localization, directly mutating
+`pole_states`, erasing operational history during reset, manual verification,
+and treating `boot` as proof of restored power.
+
 ## What we would do with two more weeks
 
 - Add a PostgreSQL inbox/outbox around queue publication.

@@ -35,8 +35,10 @@ from propel.domain.enums import (
     LocalizationPrecision,
     PoleStatus,
     ProcessingOutcome,
+    SimulatorFaultStatus,
     SuspectedAssetType,
     TelemetryEventType,
+    TelemetryOrigin,
     TicketStatus,
     TopologySource,
 )
@@ -265,6 +267,11 @@ class TelemetryEvent(Base):
     processing_outcome: Mapped[ProcessingOutcome] = mapped_column(
         text_enum(ProcessingOutcome, "processing_outcome"), nullable=False
     )
+    origin: Mapped[TelemetryOrigin] = mapped_column(
+        text_enum(TelemetryOrigin, "telemetry_origin"),
+        nullable=False,
+        server_default=TelemetryOrigin.DEVICE.value,
+    )
     state_changed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     raw_payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
@@ -404,7 +411,13 @@ class IncidentPole(Base):
 
 class Ticket(Base):
     __tablename__ = "tickets"
-    __table_args__ = (UniqueConstraint("incident_id", name="uq_tickets_incident_id"),)
+    __table_args__ = (
+        UniqueConstraint("incident_id", name="uq_tickets_incident_id"),
+        CheckConstraint(
+            "remaining_dark_count IS NULL OR remaining_dark_count >= 0",
+            name="nonnegative_remaining_dark_count",
+        ),
+    )
 
     ticket_id: Mapped[UUID] = mapped_column(
         primary_key=True, default=uuid4, server_default=text("gen_random_uuid()")
@@ -425,6 +438,29 @@ class Ticket(Base):
     resolution_claimed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     verified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    restoration_status: Mapped[str | None] = mapped_column(String(64))
+    remaining_dark_count: Mapped[int | None] = mapped_column(Integer)
+
+
+class TicketRestorationPole(Base):
+    __tablename__ = "ticket_restoration_poles"
+    __table_args__ = (
+        CheckConstraint(
+            "eligible OR exclusion_reason IS NOT NULL",
+            name="excluded_pole_has_reason",
+        ),
+    )
+
+    ticket_id: Mapped[UUID] = mapped_column(
+        ForeignKey("tickets.ticket_id", ondelete="CASCADE"), primary_key=True
+    )
+    pole_id: Mapped[int] = mapped_column(
+        ForeignKey("poles.id", ondelete="RESTRICT"), primary_key=True
+    )
+    eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    is_boundary_child: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    exclusion_reason: Mapped[str | None] = mapped_column(String(64))
+    frozen_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
 
 
 class TicketEvent(Base):
@@ -449,3 +485,35 @@ class TicketEvent(Base):
     details: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
+
+
+class SimulatedFault(Base):
+    __tablename__ = "simulated_faults"
+    __table_args__ = (
+        Index(
+            "uq_simulated_faults_active_dt",
+            "dt_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+    )
+
+    fault_id: Mapped[UUID] = mapped_column(
+        primary_key=True, default=uuid4, server_default=text("gen_random_uuid()")
+    )
+    dt_id: Mapped[int] = mapped_column(
+        ForeignKey("distribution_transformers.id", ondelete="RESTRICT"), nullable=False
+    )
+    parent_pole_id: Mapped[int] = mapped_column(
+        ForeignKey("poles.id", ondelete="RESTRICT"), nullable=False
+    )
+    child_pole_id: Mapped[int] = mapped_column(
+        ForeignKey("poles.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[SimulatorFaultStatus] = mapped_column(
+        text_enum(SimulatorFaultStatus, "simulator_fault_status"), nullable=False
+    )
+    deenergized_pole_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    injected_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    injection_telemetry_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    repaired_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))

@@ -8,7 +8,7 @@ from redis.exceptions import RedisError
 from propel.infra.analysis import PostgresDtSnapshotRepository, RedisAnalysisScheduler
 from propel.infra.dependencies import ApplicationResources
 from propel.infra.health import HealthService
-from propel.infra.incidents import PostgresIncidentService
+from propel.infra.incidents import IncidentStoreUnavailableError, PostgresIncidentService
 from propel.infra.settings import get_settings
 from propel.infra.telemetry_processor import PostgresTelemetryProcessor
 from propel.telemetry.consumer import RedisTelemetryConsumer
@@ -51,13 +51,14 @@ async def run_worker() -> None:
             max_deliveries=settings.telemetry_max_deliveries,
             analysis_debounce_seconds=settings.analysis_debounce_seconds,
         )
+        incident_service = PostgresIncidentService(resources.database)
         analysis_scheduler = RedisAnalysisScheduler(
             resources.redis,
             PostgresDtSnapshotRepository(resources.database),
             due_set_name=settings.analysis_due_set_name,
             live_freshness_seconds=settings.analysis_live_freshness_seconds,
             retry_delay_seconds=settings.analysis_retry_delay_seconds,
-            candidate_sink=PostgresIncidentService(resources.database),
+            candidate_sink=incident_service,
         )
         await consumer.ensure_group()
         recovered_count = await consumer.recover_owned_pending_once()
@@ -75,6 +76,10 @@ async def run_worker() -> None:
             try:
                 await consumer.run_cycle()
                 await analysis_scheduler.run_due_once()
+                await incident_service.verify_restorations_once(
+                    threshold=settings.restoration_threshold,
+                    stabilization_seconds=settings.restoration_stabilization_seconds,
+                )
             except RedisError as error:
                 print(
                     json.dumps(
@@ -88,6 +93,17 @@ async def run_worker() -> None:
                 await wait_for_retry(stop_event, settings.worker_retry_delay_seconds)
                 if not stop_event.is_set():
                     await consumer.ensure_group()
+            except IncidentStoreUnavailableError as error:
+                print(
+                    json.dumps(
+                        {
+                            "event": "worker_dependency_error",
+                            "dependency": "database",
+                            "error_type": type(error).__name__,
+                        }
+                    )
+                )
+                await wait_for_retry(stop_event, settings.worker_retry_delay_seconds)
     finally:
         await resources.close()
         print(json.dumps({"event": "worker_stopped", "status": "ok"}))

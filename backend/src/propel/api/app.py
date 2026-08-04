@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
 from propel.api.routes.incidents import router as incidents_router
+from propel.api.routes.simulator import router as simulator_router
 from propel.api.routes.telemetry import error_response
 from propel.api.routes.telemetry import router as telemetry_router
 from propel.api.schemas.health import DependencyStatus, HealthResponse
@@ -19,6 +20,7 @@ from propel.infra.dependencies import ApplicationResources
 from propel.infra.health import HealthService
 from propel.infra.incidents import PostgresIncidentService
 from propel.infra.settings import Settings, get_settings
+from propel.infra.simulator import HttpSimulatorTelemetryGateway, PostgresSimulatorService
 from propel.infra.telemetry import PostgresPoleBindingResolver, RedisTelemetryPublisher
 from propel.telemetry.ingestion import TelemetryIngestionService
 
@@ -28,13 +30,19 @@ def create_app(
     health_service: HealthService | None = None,
     telemetry_service: TelemetryIngestionService | None = None,
     incident_service: PostgresIncidentService | None = None,
+    simulator_service: PostgresSimulatorService | None = None,
 ) -> FastAPI:
     application_settings = settings or get_settings()
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         resources: ApplicationResources | None = None
-        if health_service is None or telemetry_service is None or incident_service is None:
+        if (
+            health_service is None
+            or telemetry_service is None
+            or incident_service is None
+            or (application_settings.simulator_enabled and simulator_service is None)
+        ):
             resources = ApplicationResources.create(application_settings)
 
         if health_service is None:
@@ -64,12 +72,26 @@ def create_app(
             application.state.incident_service = PostgresIncidentService(resources.database)
         else:
             application.state.incident_service = incident_service
+        if application_settings.simulator_enabled and simulator_service is None:
+            if resources is None:
+                raise RuntimeError("application resources were not created")
+            application.state.simulator_service = PostgresSimulatorService(
+                resources.database,
+                HttpSimulatorTelemetryGateway(
+                    application_settings.simulator_telemetry_url,
+                    timeout_seconds=application_settings.simulator_request_timeout_seconds,
+                ),
+            )
+        elif simulator_service is not None:
+            application.state.simulator_service = simulator_service
         application.state.telemetry_request_timeout_seconds = (
             application_settings.telemetry_request_timeout_seconds
         )
         try:
             yield
         finally:
+            if application_settings.simulator_enabled and simulator_service is None:
+                await application.state.simulator_service.close()
             if resources is not None:
                 await resources.close()
 
@@ -153,6 +175,8 @@ def create_app(
 
     application.include_router(telemetry_router)
     application.include_router(incidents_router)
+    if application_settings.simulator_enabled:
+        application.include_router(simulator_router)
 
     return application
 

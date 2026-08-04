@@ -53,6 +53,16 @@ class TelemetryEventType(StrEnum):
     BOOT = "boot"
 
 
+class TelemetryOrigin(StrEnum):
+    DEVICE = "DEVICE"
+    SIMULATOR = "SIMULATOR"
+
+
+class SimulatorFaultStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    REPAIRED = "REPAIRED"
+
+
 class ProcessingOutcome(StrEnum):
     ACCEPTED = "accepted"
     DUPLICATE = "duplicate"

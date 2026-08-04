@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from propel.analysis.models import FaultCandidate
-from propel.domain.enums import IncidentStatus, PoleStatus, TicketStatus
+from propel.domain.enums import DeviceHealthStatus, IncidentStatus, PoleStatus, TicketStatus
 from propel.incidents.models import (
     IncidentTicketReference,
     IncidentView,
@@ -21,10 +21,17 @@ from propel.incidents.models import (
     TicketEventView,
     TicketView,
 )
+from propel.incidents.restoration import (
+    REPAIR_NOT_VERIFIED,
+    RESTORATION_VERIFIED,
+    RestorationPoleEvidence,
+    restoration_decision,
+)
 from propel.incidents.workflow import incident_fingerprint, require_operator_transition
 from propel.infra.database.models import (
     Device,
     DeviceBinding,
+    DeviceHealth,
     DistributionTransformer,
     Incident,
     IncidentPole,
@@ -32,6 +39,7 @@ from propel.infra.database.models import (
     PoleState,
     Ticket,
     TicketEvent,
+    TicketRestorationPole,
     TopologyEdge,
 )
 
@@ -351,6 +359,7 @@ class PostgresIncidentService:
                     ticket.assigned_crew = assigned_crew
                 if requested_status == TicketStatus.RESOLVED:
                     ticket.resolution_claimed_at = occurred_at
+                    await self._freeze_restoration_set(session, ticket, occurred_at)
                 ticket.status = requested_status
                 ticket.updated_at = occurred_at
                 details = {"assigned_crew": assigned_crew} if assigned_crew else {}
@@ -382,6 +391,177 @@ class PostgresIncidentService:
         )
         return view
 
+    async def _freeze_restoration_set(
+        self,
+        session: AsyncSession,
+        ticket: Ticket,
+        frozen_at: datetime,
+    ) -> None:
+        incident = await session.get(Incident, ticket.incident_id)
+        if incident is None:
+            raise RuntimeError("ticket incident does not exist")
+        boundary_child_id = incident.suspected_asset_id.rpartition("->")[2]
+        rows = (
+            await session.execute(
+                select(
+                    Pole.id,
+                    Pole.pole_id,
+                    Device.id.label("device_id"),
+                    DeviceHealth.status.label("health_status"),
+                )
+                .join(IncidentPole, IncidentPole.pole_id == Pole.id)
+                .outerjoin(
+                    DeviceBinding,
+                    (DeviceBinding.pole_id == Pole.id) & DeviceBinding.valid_to.is_(None),
+                )
+                .outerjoin(Device, Device.id == DeviceBinding.device_id)
+                .outerjoin(DeviceHealth, DeviceHealth.device_id == Device.id)
+                .where(IncidentPole.incident_id == ticket.incident_id)
+                .order_by(Pole.pole_id)
+            )
+        ).all()
+        eligible_count = 0
+        for row in rows:
+            eligible = row.device_id is not None and row.health_status == DeviceHealthStatus.HEALTHY
+            if row.device_id is None:
+                exclusion_reason = "NO_DEVICE"
+            elif row.health_status != DeviceHealthStatus.HEALTHY:
+                exclusion_reason = "DEVICE_UNHEALTHY"
+            else:
+                exclusion_reason = None
+                eligible_count += 1
+            session.add(
+                TicketRestorationPole(
+                    ticket_id=ticket.ticket_id,
+                    pole_id=row.id,
+                    eligible=eligible,
+                    is_boundary_child=row.pole_id == boundary_child_id,
+                    exclusion_reason=exclusion_reason,
+                    frozen_at=frozen_at,
+                )
+            )
+        ticket.restoration_status = REPAIR_NOT_VERIFIED
+        ticket.remaining_dark_count = eligible_count
+
+    async def verify_restorations_once(
+        self,
+        *,
+        threshold: float,
+        stabilization_seconds: float,
+        limit: int = 100,
+    ) -> int:
+        evaluated_at = self._clock()
+        verified_ticket_ids: list[UUID] = []
+        try:
+            async with self._session_factory.begin() as session:
+                tickets = (
+                    await session.scalars(
+                        select(Ticket)
+                        .where(Ticket.status == TicketStatus.RESOLVED)
+                        .order_by(Ticket.resolution_claimed_at, Ticket.ticket_id)
+                        .limit(limit)
+                        .with_for_update(skip_locked=True)
+                    )
+                ).all()
+                for ticket in tickets:
+                    if ticket.resolution_claimed_at is None:
+                        continue
+                    rows = (
+                        await session.execute(
+                            select(
+                                Pole.pole_id,
+                                TicketRestorationPole.eligible,
+                                TicketRestorationPole.is_boundary_child,
+                                TicketRestorationPole.exclusion_reason,
+                                PoleState.state,
+                                PoleState.received_at,
+                                PoleState.device_timestamp,
+                            )
+                            .join(Pole, Pole.id == TicketRestorationPole.pole_id)
+                            .outerjoin(PoleState, PoleState.pole_id == Pole.id)
+                            .where(TicketRestorationPole.ticket_id == ticket.ticket_id)
+                            .order_by(Pole.pole_id)
+                        )
+                    ).all()
+                    evidence = tuple(
+                        RestorationPoleEvidence(
+                            pole_id=row.pole_id,
+                            eligible=row.eligible,
+                            is_boundary_child=row.is_boundary_child,
+                            state=row.state or PoleStatus.UNKNOWN,
+                            received_at=row.received_at,
+                            device_timestamp=row.device_timestamp,
+                            exclusion_reason=row.exclusion_reason,
+                        )
+                        for row in rows
+                    )
+                    decision = restoration_decision(
+                        evidence,
+                        repair_claimed_at=ticket.resolution_claimed_at,
+                        evaluated_at=evaluated_at,
+                        threshold=threshold,
+                        stabilization_seconds=stabilization_seconds,
+                    )
+                    ticket.restoration_status = decision.reason
+                    ticket.remaining_dark_count = decision.remaining_dark_count
+                    ticket.updated_at = evaluated_at
+                    if not decision.verified:
+                        continue
+
+                    common_details = {
+                        "eligible_poles": decision.eligible_count,
+                        "fresh_live_poles": decision.live_count,
+                        "threshold": threshold,
+                        "stabilization_seconds": stabilization_seconds,
+                        "stable_since": (
+                            decision.stable_since.isoformat() if decision.stable_since else None
+                        ),
+                    }
+                    session.add(
+                        TicketEvent(
+                            ticket_id=ticket.ticket_id,
+                            from_status=TicketStatus.RESOLVED,
+                            to_status=TicketStatus.VERIFIED,
+                            actor="propel-restoration-verifier",
+                            reason="fresh telemetry verified restoration",
+                            occurred_at=evaluated_at,
+                            details=common_details,
+                        )
+                    )
+                    session.add(
+                        TicketEvent(
+                            ticket_id=ticket.ticket_id,
+                            from_status=TicketStatus.VERIFIED,
+                            to_status=TicketStatus.CLOSED,
+                            actor="propel-restoration-verifier",
+                            reason="verified restoration closed ticket",
+                            occurred_at=evaluated_at,
+                            details=common_details,
+                        )
+                    )
+                    ticket.status = TicketStatus.CLOSED
+                    ticket.verified_at = evaluated_at
+                    ticket.closed_at = evaluated_at
+                    ticket.restoration_status = RESTORATION_VERIFIED
+                    incident = await session.get(Incident, ticket.incident_id)
+                    if incident is not None:
+                        incident.status = IncidentStatus.RESOLVED
+                        incident.resolved_at = evaluated_at
+                        incident.updated_at = evaluated_at
+                    verified_ticket_ids.append(ticket.ticket_id)
+        except SQLAlchemyError as error:
+            raise IncidentStoreUnavailableError from error
+        for ticket_id in verified_ticket_ids:
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "restoration_verified",
+                        "ticket_id": str(ticket_id),
+                    }
+                )
+            )
+        return len(verified_ticket_ids)
+
     async def _ticket_view(self, session: AsyncSession, ticket: Ticket) -> TicketView:
         events = (
             await session.scalars(
@@ -400,6 +580,8 @@ class PostgresIncidentService:
             resolution_claimed_at=ticket.resolution_claimed_at,
             verified_at=ticket.verified_at,
             closed_at=ticket.closed_at,
+            restoration_status=ticket.restoration_status,
+            remaining_dark_count=ticket.remaining_dark_count,
             events=tuple(
                 TicketEventView(
                     from_status=event.from_status,

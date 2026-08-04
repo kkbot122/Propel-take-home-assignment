@@ -59,7 +59,7 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 - [x] VS-04 — Idempotent worker and current pole state
 - [x] VS-05 — Surveyed-tree span localization
 - [x] VS-06 — Incident grouping and ticket workflow
-- [ ] VS-07 — Fault injection, repair, and restoration verification
+- [x] VS-07 — Fault injection, repair, and restoration verification
 - [ ] VS-08 — Minimal operator console
 - [ ] VS-09 — End-to-end test and backbone acceptance
 
@@ -349,35 +349,35 @@ def localize_known_topology(snapshot: NetworkSnapshot) -> list[FaultCandidate]:
 
 ### Simulator implementation
 
-- [ ] Add `POST /api/simulator/faults` to inject the fixed span fault.
-- [ ] Store which poles are physically de-energized in simulator state.
-- [ ] Send all simulator telemetry through `POST /api/telemetry`; do not mutate pole state directly.
-- [ ] Add `POST /api/simulator/faults/{id}/repair` to repair the active fault.
-- [ ] On repair, emit `boot` followed by `power_restored` for each affected device.
-- [ ] Add `POST /api/simulator/reset` to restore the deterministic seed scenario.
-- [ ] Mark simulator-originated telemetry for diagnostics without giving it a different processing path.
+- [x] Add `POST /api/simulator/faults` to inject the fixed span fault.
+- [x] Store which poles are physically de-energized in simulator state.
+- [x] Send all simulator telemetry through `POST /api/telemetry`; do not mutate pole state directly.
+- [x] Add `POST /api/simulator/faults/{id}/repair` to repair the active fault.
+- [x] On repair, emit `boot` followed by `power_restored` for each affected device.
+- [x] Add `POST /api/simulator/reset` to restore the deterministic seed scenario.
+- [x] Mark simulator-originated telemetry for diagnostics without giving it a different processing path.
 
 ### Restoration implementation
 
-- [ ] Freeze the eligible restoration set when the ticket enters `RESOLVED`.
-- [ ] Require restoration evidence received after the repair claim.
-- [ ] Require the boundary child to return `LIVE`.
-- [ ] Apply the configured 80% eligible-pole threshold and 10-second stabilization period.
-- [ ] Keep the ticket `RESOLVED` with `REPAIR_NOT_VERIFIED` while poles remain dark.
-- [ ] Automatically append `VERIFIED` and then `CLOSED` events when evidence passes.
-- [ ] Reject old or delayed restoration events from verifying the current incident.
+- [x] Freeze the eligible restoration set when the ticket enters `RESOLVED`.
+- [x] Require restoration evidence received after the repair claim.
+- [x] Require the boundary child to return `LIVE`.
+- [x] Apply the configured 80% eligible-pole threshold and 10-second stabilization period.
+- [x] Keep the ticket `RESOLVED` with `REPAIR_NOT_VERIFIED` while poles remain dark.
+- [x] Automatically append `VERIFIED` and then `CLOSED` events when evidence passes.
+- [x] Reject old or delayed restoration events from verifying the current incident.
 
 ### Verification
 
-- [ ] Injecting the fault through the simulator creates the expected ticket.
-- [ ] Claiming repair while poles remain dark does not verify the ticket.
-- [ ] Repair telemetry updates the affected poles to `LIVE`.
-- [ ] Fresh evidence automatically closes the correct ticket.
-- [ ] Repeating repair telemetry does not create duplicate verification events.
+- [x] Injecting the fault through the simulator creates the expected ticket.
+- [x] Claiming repair while poles remain dark does not verify the ticket.
+- [x] Repair telemetry updates the affected poles to `LIVE`.
+- [x] Fresh evidence automatically closes the correct ticket.
+- [x] Repeating repair telemetry does not create duplicate verification events.
 
 ### Exit condition
 
-- [ ] The fixed fault can be injected, ticketed, claimed repaired, telemetry-verified, and closed without direct database or state manipulation.
+- [x] The fixed fault can be injected, ticketed, claimed repaired, telemetry-verified, and closed without direct database or state manipulation.
 
 ---
 

@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     analysis_live_freshness_seconds: float = Field(default=1_920, gt=0, le=86_400)
     analysis_retry_delay_seconds: float = Field(default=5.0, gt=0, le=300)
     worker_retry_delay_seconds: float = Field(default=1.0, gt=0, le=30)
+    restoration_threshold: float = Field(default=0.8, gt=0, le=1)
+    restoration_stabilization_seconds: float = Field(default=10.0, ge=0, le=300)
+    simulator_telemetry_url: str = Field(
+        default="http://127.0.0.1:8000/api/telemetry", min_length=1, max_length=512
+    )
+    simulator_request_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    simulator_enabled: bool = True
 
 
 @lru_cache

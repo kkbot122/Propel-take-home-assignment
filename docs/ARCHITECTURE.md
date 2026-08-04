@@ -295,8 +295,8 @@ Each action locks the ticket row, validates the exact next state, updates the
 ticket, and appends a `ticket_events` row with actor, reason, timestamp, and
 action details in one transaction. `VERIFIED` and `CLOSED` are deliberately not
 operator transitions; rejection endpoints return a stable
-`AUTOMATIC_TRANSITION_ONLY` error until VS-07 supplies fresh telemetry-based
-restoration verification.
+`AUTOMATIC_TRANSITION_ONLY` error. The telemetry worker alone performs those
+transitions after evaluating frozen restoration evidence.
 
 ### 6.8 Operator Console
 
@@ -322,10 +322,15 @@ Restoration telemetry follows the same ingest pipeline as outage telemetry.
 When a crew marks work as resolved:
 
 1. The ticket enters `RESOLVED`, meaning repair has been claimed.
-2. The verifier reads the incident's affected-pole set.
-3. It waits for sufficient fresh restoration evidence.
-4. If the expected observable poles return to `LIVE`, the ticket becomes `VERIFIED` and then `CLOSED`.
-5. If poles remain dark, the ticket remains open and the UI shows `REPAIR_NOT_VERIFIED`.
+2. The transaction freezes every affected pole, its eligibility or exclusion
+   reason, and whether it is the live-to-dark boundary child.
+3. The worker accepts only `LIVE` evidence received after the repair claim.
+4. The boundary child must be `LIVE`, at least 80% of eligible poles must be
+   `LIVE`, and the evidence must remain stable for 10 seconds.
+5. Passing evidence appends separate `VERIFIED` and `CLOSED` audit events in one
+   row-locked transaction and resolves the incident.
+6. Otherwise the ticket remains `RESOLVED` with `REPAIR_NOT_VERIFIED` and the
+   current remaining-dark count.
 
 An operator action alone cannot produce `VERIFIED` or `CLOSED`.
 
@@ -709,10 +714,14 @@ The exact schema will be maintained in generated OpenAPI documentation. Planned 
 | `GET`  | `/api/network/poles`                | Read poles for map display                 |
 | `GET`  | `/api/network/topology/{dt_id}`     | Read surveyed or inferred DT topology      |
 | `GET`  | `/api/scheduled-outages`            | Read current scheduled outages             |
-| `POST` | `/api/simulator/faults`             | Inject a simulated fault                   |
-| `POST` | `/api/simulator/faults/{id}/repair` | Repair a simulated fault                   |
+| `POST` | `/api/simulator/faults`             | Inject the fixed surveyed span fault       |
+| `POST` | `/api/simulator/faults/{id}/repair` | Emit restoration telemetry for a fault     |
+| `POST` | `/api/simulator/reset`              | Repair every active simulated fault        |
 | `POST` | `/api/simulator/noise`              | Inject independent noise                   |
 | `GET`  | `/health`                           | Liveness and dependency health             |
+
+Simulator routes are a development/evaluation control surface and can be
+removed from the application route table with `SIMULATOR_ENABLED=false`.
 
 ## 16. Persistence model
 

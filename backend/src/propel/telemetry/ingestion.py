@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from propel.domain.enums import TelemetryEventType
+from propel.domain.enums import TelemetryEventType, TelemetryOrigin
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +32,7 @@ class TelemetryEnvelope:
     correlation_id: UUID
     received_at: datetime
     command: TelemetryCommand
+    origin: TelemetryOrigin = TelemetryOrigin.DEVICE
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +86,12 @@ class TelemetryIngestionService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or uuid4
 
-    async def ingest(self, command: TelemetryCommand) -> TelemetryReceipt:
+    async def ingest(
+        self,
+        command: TelemetryCommand,
+        *,
+        origin: TelemetryOrigin = TelemetryOrigin.DEVICE,
+    ) -> TelemetryReceipt:
         received_at = self._clock().astimezone(UTC)
         binding = await self._binding_resolver.resolve(command.pole_id)
         if binding is None:
@@ -97,6 +103,7 @@ class TelemetryIngestionService:
             event_id=self._id_factory(),
             correlation_id=self._id_factory(),
             received_at=received_at,
+            origin=origin,
             command=TelemetryCommand(
                 device_id=command.device_id,
                 pole_id=command.pole_id,
