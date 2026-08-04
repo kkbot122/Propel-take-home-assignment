@@ -29,7 +29,7 @@ Optimize in this order:
 - [x] PB-05 — Unknown-topology inference and localization
 - [x] PB-06 — Confidence scoring and evidence calibration
 - [x] PB-07 — Realistic multi-feeder network and telemetry generator
-- [ ] PB-08 — Batch ingestion, reliability, and measured performance
+- [x] PB-08 — Batch ingestion, reliability, and measured performance
 - [ ] PB-09 — Operator diagnostics and deployment hardening
 - [ ] PB-10 — Release acceptance and submission packaging
 
@@ -398,39 +398,52 @@ throughput or latency that has not been reproduced.
 
 ### Ingestion and worker work
 
-- [ ] Add bounded batch-ingestion schemas with per-item acceptance results.
-- [ ] Enforce request-byte, item-count, and field-size limits before allocation.
-- [ ] Preserve event-level IDs, correlation, validation errors, and idempotency.
-- [ ] Define retry behavior for partial batch acceptance and dependency failure.
-- [ ] Audit existing pending recovery, poison-event handling, and dead-letter data.
-- [ ] Add abandoned-message reclamation tests for the intended worker topology.
-- [ ] Exercise worker restart between database commit and Redis acknowledgement.
-- [ ] Verify stale scanning remains bounded at realistic pole counts.
-- [ ] Add indexes only for measured slow access paths.
+- [x] Add bounded batch-ingestion schemas with per-item acceptance results.
+- [x] Enforce request-byte, item-count, and field-size limits before allocation.
+- [x] Preserve event-level IDs, correlation, validation errors, and idempotency.
+- [x] Define retry behavior for partial batch acceptance and dependency failure.
+- [x] Audit existing pending recovery, poison-event handling, and dead-letter data.
+- [x] Add abandoned-message reclamation tests for the intended worker topology.
+- [x] Exercise worker restart between database commit and Redis acknowledgement.
+- [x] Verify stale scanning remains bounded at realistic pole counts.
+- [x] Add indexes only for measured slow access paths; PB-08 measurements did not
+      justify another index.
+
+### Full-scale map interaction
+
+- [x] Keep subdivision overview rendering bounded by hiding pole markers and
+      pole-to-pole spans below the detail zoom.
+- [x] At detail zoom, render only poles and spans inside a padded viewport unless
+      an operator explicitly selects a DT.
+- [x] Preserve feeder and DT filters for intentional full-branch inspection.
+- [x] Add browser acceptance checks for overview zoom response below 1.5 seconds
+      per step and filtered DT rendering below 2 seconds on the recorded machine.
+- [x] Record fault-to-visible and restoration-to-closed browser timings alongside
+      the backend load measurements.
 
 ### Performance measurements
 
-- [ ] Create a recorded steady-state test for at least 500 messages/second.
-- [ ] Create a 5,000-message/10-second burst test with loss accounting.
-- [ ] Measure ingest acceptance, queue delay, processing delay, localization delay,
+- [x] Create a recorded steady-state test for at least 500 messages/second.
+- [x] Create a 5,000-message/10-second burst test with loss accounting.
+- [x] Measure ingest acceptance, queue delay, processing delay, localization delay,
       incident-list response, and restoration verification separately.
-- [ ] Record machine/container limits, dataset seed, configuration, and commands.
-- [ ] Confirm no raw events, state transitions, incidents, or tickets are lost.
-- [ ] Confirm duplicate and stale traffic cannot regress current state under load.
-- [ ] Publish percentiles only from repeated measurements with sufficient samples.
+- [x] Record machine/container limits, dataset seed, configuration, and commands.
+- [x] Confirm no raw events, state transitions, incidents, or tickets are lost.
+- [x] Confirm duplicate and stale traffic cannot regress current state under load.
+- [x] Publish percentiles only from repeated measurements with sufficient samples.
 
 ### Required tests
 
-- [ ] Oversized batches fail with stable non-retryable errors.
-- [ ] Mixed-validity batches return deterministic item results.
-- [ ] Dependency failures return retryable responses without silent data loss.
-- [ ] Poison events retain bounded payloads and failure reasons.
-- [ ] The recorded steady and burst tests meet or honestly revise the target.
+- [x] Oversized batches fail with stable non-retryable errors.
+- [x] Mixed-validity batches return deterministic item results.
+- [x] Dependency failures return retryable responses without silent data loss.
+- [x] Poison events retain bounded payloads and failure reasons.
+- [x] The recorded steady and burst tests meet or honestly revise the target.
 
 ### Exit condition
 
-- [ ] Reliability behavior is proven under restart and failure, and every published
-      performance statement links to a repeatable recorded test.
+- [x] Reliability behavior is proven under restart and failure, and every published
+      performance statement links to [`PB08-PERFORMANCE.md`](PB08-PERFORMANCE.md).
 
 ---
 

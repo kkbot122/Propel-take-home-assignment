@@ -87,6 +87,7 @@ def create_app(
         application.state.telemetry_request_timeout_seconds = (
             application_settings.telemetry_request_timeout_seconds
         )
+        application.state.telemetry_batch_max_items = application_settings.telemetry_batch_max_items
         try:
             yield
         finally:
@@ -106,23 +107,32 @@ def create_app(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        if request.url.path == "/api/telemetry":
+        telemetry_limit = {
+            "/api/telemetry": application_settings.telemetry_max_request_bytes,
+            "/api/telemetry/batch": application_settings.telemetry_batch_max_request_bytes,
+        }.get(request.url.path)
+        if telemetry_limit is not None:
             content_length = request.headers.get("content-length")
             if content_length is not None:
                 try:
                     request_bytes = int(content_length)
                 except ValueError:
-                    request_bytes = application_settings.telemetry_max_request_bytes + 1
-                if (
-                    request_bytes < 0
-                    or request_bytes > application_settings.telemetry_max_request_bytes
-                ):
+                    request_bytes = telemetry_limit + 1
+                if request_bytes < 0 or request_bytes > telemetry_limit:
                     return error_response(
                         status.HTTP_413_CONTENT_TOO_LARGE,
                         "REQUEST_TOO_LARGE",
                         "telemetry request body exceeds the configured limit",
                         retryable=False,
                     )
+            body = await request.body()
+            if len(body) > telemetry_limit:
+                return error_response(
+                    status.HTTP_413_CONTENT_TOO_LARGE,
+                    "REQUEST_TOO_LARGE",
+                    "telemetry request body exceeds the configured limit",
+                    retryable=False,
+                )
         return await call_next(request)
 
     @application.exception_handler(RequestValidationError)

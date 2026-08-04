@@ -294,6 +294,12 @@ class TelemetryEvent(Base):
     received_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
+    processing_started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    processed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
     sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
     boot_generation: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     battery_mv: Mapped[int | None] = mapped_column(Integer)

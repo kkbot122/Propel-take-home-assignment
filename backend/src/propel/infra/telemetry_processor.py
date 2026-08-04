@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -52,6 +52,7 @@ class PostgresTelemetryProcessor:
         self._session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async def process(self, fields: Mapping[str, str]) -> TelemetryProcessingResult:
+        processing_started_at = datetime.now(UTC)
         envelope = parse_stream_message(fields)
         async with self._session_factory.begin() as session:
             existing = await self._existing_result(session, envelope.event_id)
@@ -95,6 +96,8 @@ class PostgresTelemetryProcessor:
                     energized=envelope.command.energized,
                     device_timestamp=envelope.command.device_timestamp,
                     received_at=envelope.received_at,
+                    processing_started_at=processing_started_at,
+                    processed_at=datetime.now(UTC),
                     sequence=envelope.command.sequence,
                     boot_generation=decision.boot_generation,
                     battery_mv=envelope.command.battery_mv,

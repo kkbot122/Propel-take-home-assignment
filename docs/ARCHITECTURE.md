@@ -150,6 +150,14 @@ Responsibilities:
 * Publish accepted telemetry to the Redis queue.
 * Return quickly without running localization inside the request.
 
+`POST /api/telemetry/batch` accepts at most the configured item and byte limits,
+validates each item independently, resolves active bindings in one bounded query,
+and returns one ordered result per input. Valid entries in a mixed batch are
+published together with a transactional Redis pipeline; invalid entries receive
+stable non-retryable errors. A Redis or identity-store failure rejects the batch
+with retryable instructions to resend the same client-supplied event IDs, so an
+ambiguous timeout remains idempotent.
+
 The ingestion API is intentionally thin so burst traffic does not block on database traversal or fault analysis.
 
 ### 6.2 Redis Event Queue
@@ -188,7 +196,18 @@ dead-letter stream before the source entry is acknowledged.
 
 Device timestamps are not used as the sole ordering mechanism because clocks may be skewed. The per-device sequence number and server receive time are the main ordering signals.
 
-The first deployment runs one telemetry consumer. This preserves a simple receive-order path while the per-device boot and sequence rules are proven. Database row locking and idempotency still protect retries. Scaling to multiple consumers requires partitioning by device or DT, or retaining the same per-device serialization guarantee.
+The first deployment runs one telemetry consumer process with bounded concurrent
+device lanes. Entries for one device remain serial and in stream order; unrelated
+devices may process concurrently up to `TELEMETRY_PROCESSING_CONCURRENCY`.
+Database row locking, immutable event IDs, and device cursors protect retries.
+Pending entries are reclaimed after the configured idle interval. Processing
+records `processing_started_at` and `processed_at` separately from trusted receive
+time so queue and database-processing delay can be measured without changing raw
+device timestamps.
+
+The worker also scans a bounded number of old, healthy device rows with
+`FOR UPDATE SKIP LOCKED`. Silence changes device health and its actively bound
+pole to `STALE`, never `DARK`, and schedules only the affected DTs for analysis.
 
 ### 6.4 Pole State Store
 
@@ -879,6 +898,9 @@ Design choices supporting the targets:
 * Batch reads and writes
 * Paginated incident APIs
 * Cached map and registry data
+* Progressive map detail: subdivision overview renders only substations, DTs,
+  and feeder-source lines; detail zoom renders viewport poles and spans, while
+  an explicit DT selection renders that branch
 
 Target measurements:
 
@@ -890,7 +912,11 @@ Target measurements:
 | Incident-list load          |                              `< 2 s` |
 | Restoration to verification |                            `< 120 s` |
 
-No performance target will be claimed until it is measured against a documented test.
+PB-08 measurements and exact reproduction commands are recorded in
+[`PB08-PERFORMANCE.md`](PB08-PERFORMANCE.md). The recorded container achieved the
+steady and burst targets without accepted-event loss. Browser measurements also
+bound overview zoom and explicit DT rendering; they do not depend on drawing all
+subdivision poles at every zoom level.
 
 ## 20. Reliability and failure handling
 

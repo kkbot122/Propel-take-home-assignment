@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -43,6 +43,8 @@ class TelemetryRequest(BaseModel):
         },
     )
 
+    event_id: UUID | None = None
+    correlation_id: UUID | None = None
     device_id: ExternalId
     pole_id: ExternalId
     event: TelemetryEventType
@@ -108,3 +110,30 @@ class ValidationErrorDetail(ErrorDetail):
 
 class ValidationErrorResponse(BaseModel):
     error: ValidationErrorDetail
+
+
+class TelemetryBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: Annotated[list[Any], Field(min_length=1, max_length=2_000)]
+
+
+class TelemetryBatchItemError(ErrorDetail):
+    issues: list[ValidationIssue] = Field(default_factory=list)
+
+
+class TelemetryBatchItemResult(BaseModel):
+    index: Annotated[int, Field(ge=0)]
+    status: Literal["accepted", "rejected"]
+    event_id: UUID | None = None
+    correlation_id: UUID | None = None
+    received_at: datetime | None = None
+    stream_id: str | None = None
+    error: TelemetryBatchItemError | None = None
+
+
+class TelemetryBatchResponse(BaseModel):
+    status: Literal["accepted", "partial", "rejected"]
+    accepted: Annotated[int, Field(ge=0)]
+    rejected: Annotated[int, Field(ge=0)]
+    results: list[TelemetryBatchItemResult]

@@ -21,14 +21,20 @@ class Settings(BaseSettings):
     telemetry_stream_name: str = Field(default="propel:telemetry", min_length=1, max_length=128)
     telemetry_request_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     telemetry_max_request_bytes: int = Field(default=16_384, ge=1_024, le=1_048_576)
+    telemetry_batch_max_request_bytes: int = Field(default=1_048_576, ge=16_384, le=4_194_304)
+    telemetry_batch_max_items: int = Field(default=500, ge=1, le=2_000)
     telemetry_consumer_group: str = Field(
         default="propel-telemetry-workers", min_length=1, max_length=128
     )
     telemetry_consumer_name: str = Field(default="telemetry-worker-1", min_length=1, max_length=128)
     telemetry_consumer_batch_size: int = Field(default=50, ge=1, le=500)
+    telemetry_processing_concurrency: int = Field(default=10, ge=1, le=50)
     telemetry_consumer_block_ms: int = Field(default=1_000, ge=1, le=30_000)
     telemetry_pending_idle_ms: int = Field(default=5_000, ge=0, le=300_000)
     telemetry_max_deliveries: int = Field(default=3, ge=1, le=100)
+    telemetry_stale_after_seconds: float = Field(default=1_920, gt=0, le=604_800)
+    telemetry_stale_scan_interval_seconds: float = Field(default=30, gt=0, le=3_600)
+    telemetry_stale_scan_batch_size: int = Field(default=500, ge=1, le=5_000)
     telemetry_dead_letter_stream_name: str = Field(
         default="propel:telemetry:dead-letter", min_length=1, max_length=128
     )

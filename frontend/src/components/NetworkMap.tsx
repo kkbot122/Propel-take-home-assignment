@@ -1,6 +1,6 @@
 import { divIcon } from 'leaflet'
 import type { LatLngBoundsExpression, LatLngExpression } from 'leaflet'
-import { useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CircleMarker,
   MapContainer,
@@ -10,6 +10,7 @@ import {
   TileLayer,
   Tooltip,
   useMap,
+  useMapEvents,
 } from 'react-leaflet'
 
 import type {
@@ -82,17 +83,59 @@ interface FitNetworkProps {
 
 function FitNetwork({ points, focusKey }: FitNetworkProps) {
   const map = useMap()
-  const serializedPoints = JSON.stringify(points)
+  const pointsRef = useRef(points)
 
   useEffect(() => {
-    if (points.length === 0) return
-    map.fitBounds(points as LatLngBoundsExpression, {
+    pointsRef.current = points
+  }, [points])
+
+  useEffect(() => {
+    if (pointsRef.current.length === 0) return
+    map.fitBounds(pointsRef.current as LatLngBoundsExpression, {
       padding: [36, 36],
       maxZoom: 17,
     })
-  }, [focusKey, map, points, serializedPoints])
+  }, [focusKey, map])
 
   return null
+}
+
+interface MapViewport {
+  zoom: number
+  south: number
+  west: number
+  north: number
+  east: number
+}
+
+function MapViewportObserver({ onChange }: { onChange: (viewport: MapViewport) => void }) {
+  const map = useMap()
+  const update = useCallback(() => {
+    const bounds = map.getBounds().pad(0.12)
+    onChange({
+      zoom: map.getZoom(),
+      south: bounds.getSouth(),
+      west: bounds.getWest(),
+      north: bounds.getNorth(),
+      east: bounds.getEast(),
+    })
+  }, [map, onChange])
+
+  useMapEvents({
+    moveend: update,
+    zoomend: update,
+  })
+  useEffect(update, [update])
+  return null
+}
+
+function poleIsVisible(pole: NetworkPole, viewport: MapViewport): boolean {
+  return (
+    pole.latitude >= viewport.south &&
+    pole.latitude <= viewport.north &&
+    pole.longitude >= viewport.west &&
+    pole.longitude <= viewport.east
+  )
 }
 
 interface NetworkMapProps {
@@ -108,7 +151,22 @@ export function NetworkMap({
   selectedIncident,
   showPoleLabels,
 }: NetworkMapProps) {
-  const topologies = subdivision?.topologies ?? []
+  const [viewport, setViewport] = useState<MapViewport | null>(null)
+  const updateViewport = useCallback((nextViewport: MapViewport) => {
+    setViewport((current) => {
+      if (
+        current?.zoom === nextViewport.zoom &&
+        current.south === nextViewport.south &&
+        current.west === nextViewport.west &&
+        current.north === nextViewport.north &&
+        current.east === nextViewport.east
+      ) {
+        return current
+      }
+      return nextViewport
+    })
+  }, [])
+  const topologies = useMemo(() => subdivision?.topologies ?? [], [subdivision?.topologies])
   const polesById = useMemo(
     () => new Map(poles.map((pole) => [pole.pole_id, pole])),
     [poles],
@@ -137,6 +195,14 @@ export function NetworkMap({
     .filter((pole): pole is NetworkPole => pole !== undefined)
     .map((pole) => [pole.latitude, pole.longitude] satisfies LatLngExpression)
   const focusPoints = useMemo<LatLngExpression[]>(() => {
+    if (selectedIncident) {
+      const incidentPoints = selectedIncident.affected_pole_ids
+        .map((poleId) => polesById.get(poleId))
+        .filter((pole): pole is NetworkPole => pole !== undefined)
+        .map((pole) => [pole.latitude, pole.longitude] satisfies LatLngExpression)
+      incidentPoints.push([selectedIncident.latitude, selectedIncident.longitude])
+      return incidentPoints
+    }
     const networkPoints = poles.map(
       (pole) => [pole.latitude, pole.longitude] satisfies LatLngExpression,
     )
@@ -154,11 +220,37 @@ export function NetworkMap({
         ),
       )
     }
-    if (selectedIncident) {
-      networkPoints.push([selectedIncident.latitude, selectedIncident.longitude])
-    }
     return networkPoints
-  }, [poles, selectedIncident, subdivision])
+  }, [poles, polesById, selectedIncident, subdivision])
+  const detailMode = showPoleLabels || selectedIncident !== null || (viewport?.zoom ?? 13) >= 15
+  const renderedPoles = useMemo(() => {
+    if (!detailMode) return []
+    if (showPoleLabels) return poles
+    if (viewport) return poles.filter((pole) => poleIsVisible(pole, viewport))
+    if (selectedIncident) {
+      const affectedPoleIds = new Set(selectedIncident.affected_pole_ids)
+      return poles.filter((pole) => affectedPoleIds.has(pole.pole_id))
+    }
+    return []
+  }, [detailMode, poles, selectedIncident, showPoleLabels, viewport])
+  const renderedPoleIds = useMemo(
+    () => new Set(renderedPoles.map((pole) => pole.pole_id)),
+    [renderedPoles],
+  )
+  const renderedTopologies = useMemo(
+    () =>
+      detailMode
+        ? topologies.map((topology) => ({
+            ...topology,
+            spans: topology.spans.filter(
+              (span) =>
+                renderedPoleIds.has(span.child_pole_id) ||
+                (span.parent_pole_id !== null && renderedPoleIds.has(span.parent_pole_id)),
+            ),
+          }))
+        : [],
+    [detailMode, renderedPoleIds, topologies],
+  )
   const selectedFeederId =
     selectedIncident?.suspected_asset_type === 'FEEDER'
       ? selectedIncident.suspected_asset_id
@@ -176,9 +268,17 @@ export function NetworkMap({
         [subdivision.bounds.north, subdivision.bounds.east],
       ]
     : DEFAULT_SUBDIVISION_BOUNDS
+  const networkFocusKey = `${selectedIncident?.incident_id ?? 'network'}:${
+    subdivision?.transformers.map((item) => item.dt_id).join(',') ?? 'empty'
+  }`
 
   return (
-    <div className="map-frame" aria-label="South Bengaluru subdivision network map">
+    <div
+      className="map-frame"
+      aria-label="South Bengaluru subdivision network map"
+      data-map-zoom={viewport?.zoom ?? 13}
+      data-rendered-poles={renderedPoles.length}
+    >
       <MapContainer
         center={DEFAULT_CENTER}
         zoom={13}
@@ -197,8 +297,9 @@ export function NetworkMap({
         />
         <FitNetwork
           points={focusPoints}
-          focusKey={selectedIncident?.incident_id ?? 'network'}
+          focusKey={networkFocusKey}
         />
+        <MapViewportObserver onChange={updateViewport} />
 
         {subdivision?.transformers.map((transformer) => {
           const feeder = feedersById.get(transformer.feeder_id)
@@ -226,7 +327,7 @@ export function NetworkMap({
           )
         })}
 
-        {topologies.flatMap((topology) =>
+        {renderedTopologies.flatMap((topology) =>
           topology.spans.map((span) => ({ span, topology })),
         ).map(({ span, topology }) => {
           const transformer = transformersById.get(topology.dt_id)
@@ -361,7 +462,7 @@ export function NetworkMap({
           )
         })}
 
-        {poles.map((pole) => {
+        {renderedPoles.map((pole) => {
           const affected = selectedIncident?.affected_pole_ids.includes(pole.pole_id) ?? false
           return (
             <CircleMarker
@@ -389,6 +490,12 @@ export function NetworkMap({
           )
         })}
       </MapContainer>
+
+      {!detailMode && (
+        <div className="map-detail-hint" role="status">
+          Zoom in or choose a feeder/DT to reveal poles and spans
+        </div>
+      )}
 
       <ul className="map-legend" aria-label="Network asset and pole state legend">
         <li>

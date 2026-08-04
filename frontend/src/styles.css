@@ -665,6 +665,22 @@ button:disabled {
   font-weight: 800;
 }
 
+.map-detail-hint {
+  position: absolute;
+  z-index: 500;
+  top: 0.7rem;
+  left: 3.35rem;
+  max-width: min(310px, calc(100% - 7rem));
+  padding: 0.42rem 0.6rem;
+  border: 1px solid rgb(103 119 109 / 45%);
+  border-radius: 3px;
+  color: #42584e;
+  background: rgb(250 252 249 / 92%);
+  box-shadow: 0 1px 5px rgb(32 49 40 / 15%);
+  font-size: 0.62rem;
+  font-weight: 750;
+}
+
 .map-legend li {
   display: flex;
   align-items: center;

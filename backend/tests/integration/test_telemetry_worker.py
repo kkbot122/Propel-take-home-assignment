@@ -18,6 +18,7 @@ from propel.domain.enums import (
 )
 from propel.infra.database.models import Device, DeviceHealth, Pole, PoleState, TelemetryEvent
 from propel.infra.settings import get_settings
+from propel.infra.staleness import PostgresStaleDeviceScanner
 from propel.infra.telemetry import RedisTelemetryPublisher
 from propel.infra.telemetry_processor import PostgresTelemetryProcessor
 from propel.telemetry.consumer import RedisTelemetryConsumer
@@ -46,13 +47,14 @@ class WorkerHarness:
         *,
         max_deliveries: int = 3,
         pending_idle_ms: int = 0,
+        consumer_name: str | None = None,
     ) -> RedisTelemetryConsumer:
         return RedisTelemetryConsumer(
             self.redis,
             processor or PostgresTelemetryProcessor(self.engine),
             stream_name=self.stream,
             group_name=self.group,
-            consumer_name=self.consumer_name,
+            consumer_name=consumer_name or self.consumer_name,
             dead_letter_stream_name=self.dead_letter_stream,
             analysis_due_set_name=self.analysis_due_set,
             batch_size=50,
@@ -282,6 +284,34 @@ async def test_worker_is_idempotent_and_sequence_aware(worker_harness: WorkerHar
 
 
 @pytest.mark.asyncio
+async def test_stale_scan_is_bounded_and_never_manufactures_darkness(
+    worker_harness: WorkerHarness,
+) -> None:
+    session_factory = async_sessionmaker(worker_harness.engine, expire_on_commit=False)
+    async with session_factory.begin() as session:
+        await session.execute(
+            update(DeviceHealth)
+            .where(DeviceHealth.device_id == worker_harness.device_id)
+            .values(last_seen_at=datetime(2019, 1, 1, tzinfo=UTC))
+        )
+    scanned_at = datetime(2026, 8, 4, tzinfo=UTC)
+    result = await PostgresStaleDeviceScanner(worker_harness.engine).scan_once(
+        cutoff=datetime(2020, 1, 1, tzinfo=UTC),
+        scanned_at=scanned_at,
+        limit=1,
+    )
+
+    assert result.scanned_devices == 1
+    async with session_factory() as session:
+        health = await session.get(DeviceHealth, worker_harness.device_id)
+        state = await session.get(PoleState, worker_harness.pole_id)
+        assert health is not None and state is not None
+        assert health.status == DeviceHealthStatus.STALE
+        assert state.state == PoleStatus.STALE
+        assert state.state != PoleStatus.DARK
+
+
+@pytest.mark.asyncio
 async def test_worker_restart_recovers_owned_pending_message(
     worker_harness: WorkerHarness,
 ) -> None:
@@ -312,6 +342,77 @@ async def test_worker_restart_recovers_owned_pending_message(
         state = await session.get(PoleState, worker_harness.pole_id)
         assert raw is not None and state is not None
         assert state.state == PoleStatus.DARK
+    assert (await worker_harness.redis.xpending(worker_harness.stream, worker_harness.group))[
+        "pending"
+    ] == 0
+
+
+@pytest.mark.asyncio
+async def test_restart_after_commit_before_ack_is_an_idempotent_replay(
+    worker_harness: WorkerHarness,
+) -> None:
+    consumer = worker_harness.consumer()
+    await consumer.ensure_group()
+    envelope = await worker_harness.publish(
+        TelemetryEventType.POWER_LOST, False, 8, datetime.now(UTC) + timedelta(seconds=1)
+    )
+    delivered = await worker_harness.redis.xreadgroup(
+        worker_harness.group,
+        worker_harness.consumer_name,
+        streams={worker_harness.stream: ">"},
+        count=1,
+    )
+    fields = delivered[0][1][0][1]
+    await PostgresTelemetryProcessor(worker_harness.engine).process(fields)
+    assert (await worker_harness.redis.xpending(worker_harness.stream, worker_harness.group))[
+        "pending"
+    ] == 1
+
+    assert await worker_harness.consumer().recover_owned_pending_once() == 1
+    session_factory = async_sessionmaker(worker_harness.engine, expire_on_commit=False)
+    async with session_factory() as session:
+        assert (
+            await session.scalar(
+                select(func.count(TelemetryEvent.id)).where(
+                    TelemetryEvent.event_id == envelope.event_id
+                )
+            )
+            == 1
+        )
+    assert (await worker_harness.redis.xpending(worker_harness.stream, worker_harness.group))[
+        "pending"
+    ] == 0
+
+
+@pytest.mark.asyncio
+async def test_second_worker_claims_an_abandoned_message(worker_harness: WorkerHarness) -> None:
+    original = worker_harness.consumer(consumer_name="worker-that-stopped")
+    await original.ensure_group()
+    envelope = await worker_harness.publish(
+        TelemetryEventType.POWER_LOST, False, 10, datetime.now(UTC) + timedelta(seconds=1)
+    )
+    await worker_harness.redis.xreadgroup(
+        worker_harness.group,
+        "worker-that-stopped",
+        streams={worker_harness.stream: ">"},
+        count=1,
+    )
+
+    replacement = worker_harness.consumer(
+        consumer_name="replacement-worker",
+        pending_idle_ms=0,
+    )
+    assert await replacement.claim_abandoned_once() == 1
+    session_factory = async_sessionmaker(worker_harness.engine, expire_on_commit=False)
+    async with session_factory() as session:
+        assert (
+            await session.scalar(
+                select(func.count(TelemetryEvent.id)).where(
+                    TelemetryEvent.event_id == envelope.event_id
+                )
+            )
+            == 1
+        )
     assert (await worker_harness.redis.xpending(worker_harness.stream, worker_harness.group))[
         "pending"
     ] == 0
@@ -390,6 +491,7 @@ async def test_poison_message_moves_to_dead_letter_after_delivery_limit(
             "device_id": "DEV-P-002",
             "pole_id": "P-002",
             "event": "power_lost",
+            "unbounded_payload": "sensitive" * 2_000,
         },
     )
 
@@ -407,3 +509,5 @@ async def test_poison_message_moves_to_dead_letter_after_delivery_limit(
     assert dead_letters[0][1]["source_message_id"] == message_id
     assert dead_letters[0][1]["failure_reason"] == "missing_required_fields"
     assert dead_letters[0][1]["attempts"] == "2"
+    assert "unbounded_payload" not in dead_letters[0][1]
+    assert all(len(value) <= 500 for value in dead_letters[0][1].values())

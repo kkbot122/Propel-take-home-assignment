@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
@@ -147,3 +148,32 @@ async def test_real_redis_connection_failure_is_retryable() -> None:
         "message": "telemetry queue is temporarily unavailable",
         "retryable": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_mixed_batch_atomically_publishes_valid_items(redis_client: Redis) -> None:
+    settings = Settings()
+    first_event_id = uuid4()
+    second_event_id = uuid4()
+    async with running_api(settings) as client:
+        response = await client.post(
+            "/api/telemetry/batch",
+            json={
+                "items": [
+                    SAMPLE_PAYLOAD | {"event_id": str(first_event_id), "seq": 301},
+                    SAMPLE_PAYLOAD | {"seq": "invalid"},
+                    SAMPLE_PAYLOAD | {"event_id": str(second_event_id), "seq": 302},
+                ]
+            },
+        )
+
+    assert response.status_code == 207
+    assert response.json()["accepted"] == 2
+    assert response.json()["rejected"] == 1
+    assert [item["index"] for item in response.json()["results"]] == [0, 1, 2]
+    assert response.json()["results"][1]["error"]["code"] == "VALIDATION_ERROR"
+    entries = await redis_client.xrange(settings.telemetry_stream_name)
+    assert [fields["event_id"] for _, fields in entries] == [
+        str(first_event_id),
+        str(second_event_id),
+    ]

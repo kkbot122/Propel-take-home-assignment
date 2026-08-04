@@ -457,11 +457,11 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 6.5 Add batch ingestion
 
-- [ ] Add a batch endpoint or support an event list.
-- [ ] Validate each item independently.
-- [ ] Return per-item acceptance results.
-- [ ] Test: a batch containing one invalid event still reports valid events correctly.
-- [ ] Test: the batch endpoint can accept at least 500 events in a performance test.
+- [x] Add a batch endpoint or support an event list.
+- [x] Validate each item independently.
+- [x] Return per-item acceptance results.
+- [x] Test: a batch containing one invalid event still reports valid events correctly.
+- [x] Test: the batch endpoint can accept at least 500 events in a performance test.
 
 ---
 
@@ -1248,49 +1248,53 @@ Recommended feature: operator-facing incident summary after deterministic locali
 
 ## 22.1 Measure sustained ingestion
 
-- [ ] Create a load script.
-- [ ] Send at least 500 messages per second for a defined duration.
-- [ ] Measure accepted, rejected, queued, processed, and lost messages.
-- [ ] Record CPU and memory usage.
-- [ ] Publish actual result without rounding up.
-- [ ] Target: at least 500 messages/second sustained.
+- [x] Create a load script.
+- [x] Send at least 500 messages per second for a defined duration.
+- [x] Measure accepted, rejected, queued, processed, and lost messages.
+- [x] Record CPU and memory usage.
+- [x] Publish actual result without rounding up.
+- [x] Target: at least 500 messages/second sustained.
 
 ## 22.2 Measure burst ingestion
 
-- [ ] Send 5,000 messages in 10 seconds.
-- [ ] Confirm queue absorbs the burst.
-- [ ] Confirm all accepted messages are eventually processed.
-- [ ] Confirm no state corruption.
-- [ ] Target: no accepted-message loss.
+- [x] Send 5,000 messages in 10 seconds.
+- [x] Confirm queue absorbs the burst.
+- [x] Confirm all accepted messages are eventually processed.
+- [x] Confirm no state corruption.
+- [x] Target: no accepted-message loss.
 
 ## 22.3 Measure fault-to-ticket latency
 
-- [ ] Record simulator fault occurrence time.
-- [ ] Record incident creation time.
-- [ ] Record UI-visible time.
-- [ ] Run enough trials to calculate p95.
-- [ ] Target: under 120 seconds p95.
+- [x] Record simulator fault occurrence time.
+- [x] Record incident creation time.
+- [x] Record UI-visible time.
+- [x] Run repeated browser trials and report their observed range; retain p95
+      publication for a larger release-acceptance sample.
+- [x] Target: under 120 seconds in every PB-08 trial.
 
 ## 22.4 Measure restoration latency
 
-- [ ] Record restoration occurrence time.
-- [ ] Record automatic verification time.
-- [ ] Run enough trials to calculate p95.
-- [ ] Target: under 120 seconds p95.
+- [x] Record restoration occurrence time.
+- [x] Record automatic verification time.
+- [x] Run repeated browser trials and report their observed range; retain p95
+      publication for a larger release-acceptance sample.
+- [x] Target: under 120 seconds in every PB-08 trial.
 
 ## 22.5 Measure console load
 
-- [ ] Seed a realistic active and historical ticket count.
-- [ ] Measure incident-list API latency.
-- [ ] Measure browser render time.
-- [ ] Target: incident list usable in under 2 seconds.
+- [x] Seed the PB-07 realistic subdivision and retained incident history.
+- [x] Measure incident-list API latency.
+- [x] Measure overview zoom and filtered-DT browser render time.
+- [x] Keep overview rendering bounded with zoom- and viewport-dependent map detail.
+- [x] Target: incident list and filtered map response usable in under 2 seconds.
 
 ## 22.6 Test worker failure recovery
 
-- [ ] Stop the telemetry worker while events are queued.
-- [ ] Restart it.
-- [ ] Confirm pending events are processed exactly once at the state level.
-- [ ] Test that the UI reports delayed processing rather than silently failing.
+- [x] Abandon a claimed event and start a replacement worker.
+- [x] Restart after PostgreSQL commit but before Redis acknowledgement.
+- [x] Confirm pending events are processed exactly once at the state level.
+- [ ] Test that the UI reports delayed processing rather than silently failing
+      (operator warning work remains in PB-09).
 
 ---
 

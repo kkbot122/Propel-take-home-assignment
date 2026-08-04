@@ -11,9 +11,38 @@ test('operator completes the surveyed-span backbone workflow', async ({ page, re
   await expect(page.getByText('System online', { exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No active outages' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'OpenStreetMap' })).toBeVisible()
-  await expect(page.getByText('FDR-001 source', { exact: true })).toBeVisible()
-  await expect(page.getByText('DT-001', { exact: true })).toBeVisible()
-  await expect(page.getByText('DT-002', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'South Bengaluru subdivision' })).toBeVisible()
+  await expect(page.getByText('3 substations · 5 feeders · 19 DTs')).toBeVisible()
+  const detailHint = page.getByText('Zoom in or choose a feeder/DT to reveal poles and spans')
+  await expect(detailHint).toBeVisible()
+  const map = page.getByLabel('South Bengaluru subdivision network map')
+  await expect(map).toHaveAttribute('data-rendered-poles', '0')
+  await page.waitForTimeout(750)
+
+  const zoomIn = page.getByRole('button', { name: 'Zoom in' })
+  const zoomLatencies: number[] = []
+  for (let index = 0; index < 6; index += 1) {
+    const previousZoom = Number(await map.getAttribute('data-map-zoom'))
+    if (previousZoom >= 15) break
+    const zoomStartedAt = Date.now()
+    await zoomIn.click()
+    await expect
+      .poll(async () => Number(await map.getAttribute('data-map-zoom')), { timeout: 1_500 })
+      .toBeGreaterThan(previousZoom)
+    zoomLatencies.push(Date.now() - zoomStartedAt)
+  }
+  await expect(detailHint).toBeHidden({ timeout: 2_000 })
+  const overviewZoomMs = Math.max(...zoomLatencies)
+  expect(overviewZoomMs).toBeLessThan(1_500)
+  expect(Number(await map.getAttribute('data-rendered-poles'))).toBeGreaterThan(0)
+
+  const filterStartedAt = Date.now()
+  await page.getByLabel('Filter map by feeder').selectOption({ label: 'Synthetic Feeder 4' })
+  await page.getByLabel('Filter map by transformer').selectOption({ label: 'Synthetic DT 16' })
+  await expect(page.getByText('1 substations · 1 feeders · 1 DTs')).toBeVisible()
+  const filteredRenderMs = Date.now() - filterStartedAt
+  expect(filteredRenderMs).toBeLessThan(2_000)
+  await page.getByLabel('Filter map by feeder').selectOption('ALL')
 
   const faultStartedAt = Date.now()
   await page.getByRole('button', { name: 'Inject span fault A' }).click()
@@ -108,6 +137,7 @@ test('operator completes the surveyed-span backbone workflow', async ({ page, re
   expect(pageErrors).toEqual([])
 
   console.log(
-    `VS09_METRIC fault_to_visible_ms=${faultToVisibleMs} restoration_to_closed_ms=${restorationToClosedMs}`,
+    `PB08_METRIC overview_zoom_ms=${overviewZoomMs} filtered_render_ms=${filteredRenderMs} ` +
+      `fault_to_visible_ms=${faultToVisibleMs} restoration_to_closed_ms=${restorationToClosedMs}`,
   )
 })

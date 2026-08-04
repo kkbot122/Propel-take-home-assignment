@@ -445,6 +445,38 @@ operable without reducing the underlying network.
 startup, using inferred MST edges as physical truth, and seeding one alert per
 generated pole.
 
+## 2026-08-04 — Batch atomically, serialize per device, and render map detail progressively
+
+**Chosen:** `POST /api/telemetry/batch` applies configurable byte and item limits,
+validates items independently, resolves active bindings in one query, and returns
+ordered per-item results. The accepted subset is appended with one transactional
+Redis pipeline. A dependency failure rejects the whole accepted subset as retryable;
+clients resend the same event IDs and worker-side idempotency makes ambiguous
+delivery safe.
+
+The worker processes different device lanes with bounded concurrency while keeping
+events for one device serial. It acknowledges only after the PostgreSQL transaction,
+reclaims abandoned pending messages, stores processing start/end timestamps, and
+runs bounded stale scans that can produce `STALE` but never `DARK`. Restart,
+dead-letter bounding, stale-scan, mixed-batch, dependency-failure, and duplicate/
+stale-load behavior are protected by integration or load tests.
+
+The full subdivision remains available on the main map, but visual detail is
+progressive. The overview draws substations, DTs, and feeder-source connections.
+At detail zoom it draws only poles and spans in a padded viewport, and explicit
+DT selection draws the whole chosen branch. This keeps the registry-safe PB-07
+network inspectable while avoiding thousands of Leaflet DOM layers during every
+pan and zoom.
+
+**Measurement:** [`PB08-PERFORMANCE.md`](PB08-PERFORMANCE.md) records the commands,
+environment, steady/burst percentiles, zero-loss accounting, ordering guard, CPU/
+memory sample, and repeated browser timings.
+
+**Rejected:** One HTTP request per event during bursts, partial Redis publication
+without a retry contract, concurrent processing within one device stream, silence
+as outage evidence, rendering every pole at subdivision overview, and publishing
+percentiles from a single smoke run.
+
 ## What we would do with two more weeks
 
 - Add a PostgreSQL inbox/outbox around queue publication.

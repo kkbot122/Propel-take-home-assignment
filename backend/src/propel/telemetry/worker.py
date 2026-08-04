@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import signal
+from datetime import UTC, datetime, timedelta
+from time import monotonic
 
 from redis.exceptions import RedisError
 
@@ -10,6 +12,7 @@ from propel.infra.dependencies import ApplicationResources
 from propel.infra.health import HealthService
 from propel.infra.incidents import IncidentStoreUnavailableError, PostgresIncidentService
 from propel.infra.settings import get_settings
+from propel.infra.staleness import PostgresStaleDeviceScanner, StaleScanUnavailableError
 from propel.infra.telemetry_processor import PostgresTelemetryProcessor
 from propel.telemetry.consumer import RedisTelemetryConsumer
 
@@ -50,8 +53,10 @@ async def run_worker() -> None:
             pending_idle_ms=settings.telemetry_pending_idle_ms,
             max_deliveries=settings.telemetry_max_deliveries,
             analysis_debounce_seconds=settings.analysis_debounce_seconds,
+            processing_concurrency=settings.telemetry_processing_concurrency,
         )
         incident_service = PostgresIncidentService(resources.database)
+        stale_scanner = PostgresStaleDeviceScanner(resources.database)
         analysis_scheduler = RedisAnalysisScheduler(
             resources.redis,
             PostgresDtSnapshotRepository(resources.database),
@@ -79,9 +84,28 @@ async def run_worker() -> None:
                     }
                 )
             )
+        next_stale_scan_at = monotonic()
         while not stop_event.is_set():
             try:
                 await consumer.run_cycle()
+                if monotonic() >= next_stale_scan_at:
+                    scanned_at = datetime.now(UTC)
+                    stale_result = await stale_scanner.scan_once(
+                        cutoff=scanned_at
+                        - timedelta(seconds=settings.telemetry_stale_after_seconds),
+                        scanned_at=scanned_at,
+                        limit=settings.telemetry_stale_scan_batch_size,
+                    )
+                    if stale_result.dt_ids:
+                        due_score = scanned_at.timestamp() + settings.analysis_debounce_seconds
+                        await resources.redis.zadd(
+                            settings.analysis_due_set_name,
+                            {dt_id: due_score for dt_id in stale_result.dt_ids},
+                            gt=True,
+                        )
+                    next_stale_scan_at = (
+                        monotonic() + settings.telemetry_stale_scan_interval_seconds
+                    )
                 await analysis_scheduler.run_due_once()
                 await incident_service.verify_restorations_once(
                     threshold=settings.restoration_threshold,
@@ -101,7 +125,7 @@ async def run_worker() -> None:
                 await wait_for_retry(stop_event, settings.worker_retry_delay_seconds)
                 if not stop_event.is_set():
                     await consumer.ensure_group()
-            except IncidentStoreUnavailableError as error:
+            except (IncidentStoreUnavailableError, StaleScanUnavailableError) as error:
                 print(
                     json.dumps(
                         {

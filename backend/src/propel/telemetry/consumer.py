@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -40,6 +42,7 @@ class RedisTelemetryConsumer:
         pending_idle_ms: int,
         max_deliveries: int,
         analysis_debounce_seconds: float,
+        processing_concurrency: int = 10,
     ) -> None:
         self._redis = redis_client
         self._processor = processor
@@ -53,6 +56,7 @@ class RedisTelemetryConsumer:
         self._pending_idle_ms = pending_idle_ms
         self._max_deliveries = max_deliveries
         self._analysis_debounce_seconds = analysis_debounce_seconds
+        self._processing_concurrency = max(1, min(processing_concurrency, batch_size))
 
     async def ensure_group(self) -> None:
         try:
@@ -110,20 +114,33 @@ class RedisTelemetryConsumer:
         return await self.consume_new_once()
 
     async def _process_entries(self, entries: list[StreamEntry]) -> None:
+        entries_by_device: defaultdict[str, list[StreamEntry]] = defaultdict(list)
         for entry in entries:
-            try:
-                result = await self._processor.process(entry.fields)
-                if result.state_changed:
-                    due_score = result.received_at.timestamp() + self._analysis_debounce_seconds
-                    await self._redis.zadd(
-                        self._analysis_due_set_name,
-                        {result.dt_id: due_score},
-                        gt=True,
-                    )
-                await self._redis.xack(self._stream_name, self._group_name, entry.message_id)
-                self._log_result(entry, result)
-            except Exception as error:
-                await self._handle_failure(entry, error)
+            device_key = entry.fields.get("device_id") or f"missing:{entry.message_id}"
+            entries_by_device[device_key].append(entry)
+        semaphore = asyncio.Semaphore(self._processing_concurrency)
+
+        async def process_device(device_entries: list[StreamEntry]) -> None:
+            async with semaphore:
+                for entry in device_entries:
+                    await self._process_entry(entry)
+
+        await asyncio.gather(*(process_device(group) for group in entries_by_device.values()))
+
+    async def _process_entry(self, entry: StreamEntry) -> None:
+        try:
+            result = await self._processor.process(entry.fields)
+            if result.state_changed:
+                due_score = result.received_at.timestamp() + self._analysis_debounce_seconds
+                await self._redis.zadd(
+                    self._analysis_due_set_name,
+                    {result.dt_id: due_score},
+                    gt=True,
+                )
+            await self._redis.xack(self._stream_name, self._group_name, entry.message_id)
+            self._log_result(entry, result)
+        except Exception as error:
+            await self._handle_failure(entry, error)
 
     async def _handle_failure(self, entry: StreamEntry, error: Exception) -> None:
         pending = await self._redis.xpending_range(
