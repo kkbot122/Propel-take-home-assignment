@@ -477,6 +477,26 @@ without a retry contract, concurrent processing within one device stream, silenc
 as outage evidence, rendering every pole at subdivision overview, and publishing
 percentiles from a single smoke run.
 
+## 2026-08-04 — Keep the long-running simulator fresh without erasing uncertainty
+
+**Chosen:** While the development simulator is enabled, the telemetry worker sends
+an immediate and then ten-minute energized heartbeat for each eligible simulated
+device through `POST /api/telemetry/batch`. The interval stays below the 32-minute
+stale threshold. Devices marked `generated_offline` or `simulator_missing_device`
+remain excluded, as do all poles inside an active simulated physical fault.
+
+A device marked stale only by `device_silence_timeout` may report again, including
+during fixed fault injection. Simulator sequences use a wall-clock-derived floor
+to avoid racing a queued refresh. If a requested fault has no report-capable
+devices, the API returns `409 SIMULATOR_NO_TELEMETRY` and removes the un-emitted
+physical fault instead of calling `max()` on an empty receipt set.
+
+**Reason:** The stale scanner was correctly aging a static PB-07 dataset, but the
+simulator was not producing the steady heartbeat traffic that the dataset models.
+After 32 minutes the whole demo became stale, and fault injection could produce no
+commands. Periodic public-path telemetry preserves both long-running usability and
+the distinction between silence, intentional offline devices, and actual outages.
+
 ## What we would do with two more weeks
 
 - Add a PostgreSQL inbox/outbox around queue publication.

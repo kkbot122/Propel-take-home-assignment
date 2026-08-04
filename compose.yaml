@@ -40,6 +40,8 @@ x-backend-environment: &backend-environment
   RESTORATION_STABILIZATION_SECONDS: ${RESTORATION_STABILIZATION_SECONDS:-10}
   SIMULATOR_TELEMETRY_URL: ${SIMULATOR_TELEMETRY_URL:-http://127.0.0.1:8000/api/telemetry}
   SIMULATOR_REQUEST_TIMEOUT_SECONDS: ${SIMULATOR_REQUEST_TIMEOUT_SECONDS:-3}
+  SIMULATOR_HEARTBEAT_INTERVAL_SECONDS: ${SIMULATOR_HEARTBEAT_INTERVAL_SECONDS:-600}
+  SIMULATOR_HEARTBEAT_BATCH_SIZE: ${SIMULATOR_HEARTBEAT_BATCH_SIZE:-500}
   SIMULATOR_ENABLED: ${SIMULATOR_ENABLED:-true}
   SIMULATOR_GENERATED_NETWORK_ENABLED: ${SIMULATOR_GENERATED_NETWORK_ENABLED:-true}
   SIMULATOR_GENERATION_SEED: ${SIMULATOR_GENERATION_SEED:-7307}
@@ -125,10 +127,14 @@ services:
   telemetry-worker:
     build: *backend-build
     command: ["propel-worker"]
-    environment: *backend-environment
+    environment:
+      <<: *backend-environment
+      SIMULATOR_TELEMETRY_URL: http://backend-api:8000/api/telemetry
     depends_on:
       init:
         condition: service_completed_successfully
+      backend-api:
+        condition: service_healthy
     restart: unless-stopped
 
   backend-tests:

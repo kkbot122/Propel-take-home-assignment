@@ -1,7 +1,7 @@
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from sqlalchemy import func, select, text, update
@@ -63,6 +63,10 @@ class MissingSimulatorDeviceError(Exception):
     pass
 
 
+class NoSimulatorTelemetryError(Exception):
+    pass
+
+
 class SimulatorDatasetNotFoundError(Exception):
     pass
 
@@ -76,6 +80,7 @@ class SimulatorDevice:
     firmware: str | None
     health_status: DeviceHealthStatus | None
     can_report_power_loss: bool | None
+    status_reason: str
 
 
 class HttpSimulatorTelemetryGateway:
@@ -84,7 +89,14 @@ class HttpSimulatorTelemetryGateway:
         self._client = httpx.AsyncClient(timeout=timeout_seconds)
 
     async def emit(self, command: TelemetryCommand) -> SimulatorEmissionReceipt:
-        payload = {
+        receipts = await self.emit_many((command,))
+        return receipts[0]
+
+    @staticmethod
+    def _payload(command: TelemetryCommand) -> dict[str, object]:
+        return {
+            "event_id": str(uuid4()),
+            "correlation_id": str(uuid4()),
             "device_id": command.device_id,
             "pole_id": command.pole_id,
             "event": command.event.value,
@@ -95,17 +107,31 @@ class HttpSimulatorTelemetryGateway:
             "rssi": command.rssi,
             "fw": command.firmware,
         }
+
+    async def emit_many(
+        self, commands: tuple[TelemetryCommand, ...]
+    ) -> tuple[SimulatorEmissionReceipt, ...]:
+        if not commands:
+            return ()
         try:
             response = await self._client.post(
-                self._telemetry_url,
-                json=payload,
+                f"{self._telemetry_url.rstrip('/')}/batch",
+                json={"items": [self._payload(command) for command in commands]},
                 headers={"x-propel-telemetry-origin": "simulator"},
             )
             response.raise_for_status()
             body = response.json()
-            return SimulatorEmissionReceipt(
-                event_id=UUID(body["event_id"]),
-                received_at=datetime.fromisoformat(body["received_at"].replace("Z", "+00:00")),
+            results = body["results"]
+            if len(results) != len(commands) or any(
+                item.get("status") != "accepted" for item in results
+            ):
+                raise SimulatorTelemetryUnavailableError
+            return tuple(
+                SimulatorEmissionReceipt(
+                    event_id=UUID(item["event_id"]),
+                    received_at=datetime.fromisoformat(item["received_at"].replace("Z", "+00:00")),
+                )
+                for item in results
             )
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
             raise SimulatorTelemetryUnavailableError from error
@@ -138,6 +164,7 @@ class PostgresSimulatorService:
         omit_loss_pole_ids: tuple[str, ...] = (),
     ) -> SimulatedFaultView:
         injected_at = self._clock()
+        no_telemetry = False
         try:
             async with self._session_factory.begin() as session:
                 transformer_id = await session.scalar(
@@ -211,10 +238,17 @@ class PostgresSimulatorService:
                     missing_device_pole_ids,
                 )
                 receipts = await self._emit_all(commands)
-                fault.injection_telemetry_at = max(receipt.received_at for receipt in receipts)
-                view = await self._fault_view(session, fault, receipts)
+                if not receipts:
+                    await session.delete(fault)
+                    no_telemetry = True
+                    view = None
+                else:
+                    fault.injection_telemetry_at = max(receipt.received_at for receipt in receipts)
+                    view = await self._fault_view(session, fault, receipts)
         except SQLAlchemyError as error:
             raise SimulatorStoreUnavailableError from error
+        if no_telemetry or view is None:
+            raise NoSimulatorTelemetryError
         return view
 
     async def generated_manifest(self, dataset_id: str | None = None) -> dict[str, object]:
@@ -246,6 +280,7 @@ class PostgresSimulatorService:
         if fault_type not in (SimulatorFaultType.DT_FAULT, SimulatorFaultType.FEEDER_FAULT):
             raise InvalidSimulatorSpanError
         injected_at = self._clock()
+        no_telemetry = False
         try:
             async with self._session_factory.begin() as session:
                 feeder_internal_id = await session.scalar(
@@ -313,10 +348,17 @@ class PostgresSimulatorService:
                     missing_device_pole_ids,
                 )
                 receipts = await self._emit_all(commands)
-                fault.injection_telemetry_at = max(receipt.received_at for receipt in receipts)
-                view = await self._fault_view(session, fault, receipts)
+                if not receipts:
+                    await session.delete(fault)
+                    no_telemetry = True
+                    view = None
+                else:
+                    fault.injection_telemetry_at = max(receipt.received_at for receipt in receipts)
+                    view = await self._fault_view(session, fault, receipts)
         except SQLAlchemyError as error:
             raise SimulatorStoreUnavailableError from error
+        if no_telemetry or view is None:
+            raise NoSimulatorTelemetryError
         return view
 
     async def _locked_active_faults(
@@ -499,6 +541,7 @@ class PostgresSimulatorService:
                     DeviceHealth.firmware,
                     DeviceHealth.status,
                     DeviceHealth.can_report_power_loss,
+                    DeviceHealth.status_reason,
                 )
                 .join(DeviceBinding, DeviceBinding.pole_id == Pole.id)
                 .join(Device, Device.id == DeviceBinding.device_id)
@@ -515,6 +558,7 @@ class PostgresSimulatorService:
                 firmware=row.firmware,
                 health_status=row.status,
                 can_report_power_loss=row.can_report_power_loss,
+                status_reason=row.status_reason,
             )
             for row in rows
         }
@@ -556,7 +600,9 @@ class PostgresSimulatorService:
             is_affected = pole_id in affected_ids
             if is_affected and pole_id in omitted_loss_pole_ids:
                 continue
-            if row.health_status not in (None, DeviceHealthStatus.HEALTHY):
+            if row.health_status not in (None, DeviceHealthStatus.HEALTHY) and (
+                row.status_reason != "device_silence_timeout"
+            ):
                 continue
             if is_affected and row.can_report_power_loss is False:
                 continue
@@ -567,7 +613,10 @@ class PostgresSimulatorService:
                     TelemetryEventType.POWER_LOST if is_affected else TelemetryEventType.HEARTBEAT,
                     not is_affected,
                     occurred_at,
-                    (row.last_sequence or 0) + 1,
+                    max(
+                        (row.last_sequence or 0) + 1,
+                        int(occurred_at.timestamp() * 1_000_000),
+                    ),
                 )
             )
         return tuple(commands)
@@ -582,7 +631,10 @@ class PostgresSimulatorService:
         commands: list[TelemetryCommand] = []
         for index, pole_id in enumerate(affected_ids):
             row = rows.get(pole_id)
-            if row is None or row.health_status not in (None, DeviceHealthStatus.HEALTHY):
+            if row is None or (
+                row.health_status not in (None, DeviceHealthStatus.HEALTHY)
+                and row.status_reason != "device_silence_timeout"
+            ):
                 continue
             boot_at = occurred_at + timedelta(milliseconds=index * 2)
             commands.append(self._command(row, pole_id, TelemetryEventType.BOOT, True, boot_at, 0))

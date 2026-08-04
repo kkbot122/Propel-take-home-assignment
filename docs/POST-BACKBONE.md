@@ -406,6 +406,10 @@ throughput or latency that has not been reproduced.
 - [x] Add abandoned-message reclamation tests for the intended worker topology.
 - [x] Exercise worker restart between database commit and Redis acknowledgement.
 - [x] Verify stale scanning remains bounded at realistic pole counts.
+- [x] Keep eligible simulator devices fresh through periodic public batch
+      heartbeats while preserving modeled offline, missing, and faulted poles.
+- [x] Return a stable domain error when a simulated scope has no telemetry
+      emitters; never leave an incomplete active fault or raise from an empty set.
 - [x] Add indexes only for measured slow access paths; PB-08 measurements did not
       justify another index.
 

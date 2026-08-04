@@ -17,6 +17,7 @@ they are not production capacity promises.
 | Active bindings seen by load tool | 1,824 |
 | Batch size | 100 |
 | Worker concurrency | 10 device lanes |
+| Simulator heartbeat | 600 seconds, batches of at most 500 |
 
 The performance command sends client-generated event and correlation IDs through
 the public batch API, waits for the matching immutable PostgreSQL rows to receive
@@ -84,6 +85,10 @@ During the soak, one active-window `docker stats` sample recorded API 2.30% CPU 
 The ordering-noise run sent 2,000 events for one device: one newer live heartbeat
 followed by 1,999 loss reports with the same sequence. It accepted and processed
 all 2,000 at 525.183 msg/s with zero loss; the guarded pole remained `LIVE`.
+
+The long-running development stack also emits one heartbeat per eligible simulator
+device every ten minutes through the same batch endpoint. Load trials should begin
+after the startup refresh drains so the recorded target stream remains isolated.
 
 ## Browser results
 

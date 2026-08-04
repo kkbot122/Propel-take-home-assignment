@@ -12,6 +12,11 @@ from propel.infra.dependencies import ApplicationResources
 from propel.infra.health import HealthService
 from propel.infra.incidents import IncidentStoreUnavailableError, PostgresIncidentService
 from propel.infra.settings import get_settings
+from propel.infra.simulator import HttpSimulatorTelemetryGateway, SimulatorTelemetryUnavailableError
+from propel.infra.simulator_heartbeat import (
+    PostgresSimulatorHeartbeatEmitter,
+    SimulatorHeartbeatStoreUnavailableError,
+)
 from propel.infra.staleness import PostgresStaleDeviceScanner, StaleScanUnavailableError
 from propel.infra.telemetry_processor import PostgresTelemetryProcessor
 from propel.telemetry.consumer import RedisTelemetryConsumer
@@ -29,6 +34,7 @@ async def run_worker() -> None:
     resources = ApplicationResources.create(settings)
     stop_event = asyncio.Event()
     event_loop = asyncio.get_running_loop()
+    simulator_gateway: HttpSimulatorTelemetryGateway | None = None
 
     for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
         event_loop.add_signal_handler(shutdown_signal, stop_event.set)
@@ -57,6 +63,16 @@ async def run_worker() -> None:
         )
         incident_service = PostgresIncidentService(resources.database)
         stale_scanner = PostgresStaleDeviceScanner(resources.database)
+        heartbeat_emitter: PostgresSimulatorHeartbeatEmitter | None = None
+        if settings.simulator_enabled:
+            simulator_gateway = HttpSimulatorTelemetryGateway(
+                settings.simulator_telemetry_url,
+                timeout_seconds=settings.simulator_request_timeout_seconds,
+            )
+            heartbeat_emitter = PostgresSimulatorHeartbeatEmitter(
+                resources.database,
+                simulator_gateway,
+            )
         analysis_scheduler = RedisAnalysisScheduler(
             resources.redis,
             PostgresDtSnapshotRepository(resources.database),
@@ -85,9 +101,30 @@ async def run_worker() -> None:
                 )
             )
         next_stale_scan_at = monotonic()
+        next_heartbeat_at = monotonic()
         while not stop_event.is_set():
             try:
                 await consumer.run_cycle()
+                if heartbeat_emitter is not None and monotonic() >= next_heartbeat_at:
+                    heartbeat_at = datetime.now(UTC)
+                    heartbeat_result = await heartbeat_emitter.emit_once(
+                        emitted_at=heartbeat_at,
+                        batch_size=min(
+                            settings.simulator_heartbeat_batch_size,
+                            settings.telemetry_batch_max_items,
+                        ),
+                    )
+                    print(
+                        json.dumps(
+                            {
+                                "event": "simulator_heartbeat_emitted",
+                                "eligible_devices": heartbeat_result.eligible_devices,
+                                "emitted_events": heartbeat_result.emitted_events,
+                                "excluded_fault_poles": heartbeat_result.excluded_fault_poles,
+                            }
+                        )
+                    )
+                    next_heartbeat_at = monotonic() + settings.simulator_heartbeat_interval_seconds
                 if monotonic() >= next_stale_scan_at:
                     scanned_at = datetime.now(UTC)
                     stale_result = await stale_scanner.scan_once(
@@ -136,7 +173,22 @@ async def run_worker() -> None:
                     )
                 )
                 await wait_for_retry(stop_event, settings.worker_retry_delay_seconds)
+            except (
+                SimulatorHeartbeatStoreUnavailableError,
+                SimulatorTelemetryUnavailableError,
+            ) as error:
+                print(
+                    json.dumps(
+                        {
+                            "event": "simulator_heartbeat_error",
+                            "error_type": type(error).__name__,
+                        }
+                    )
+                )
+                await wait_for_retry(stop_event, settings.worker_retry_delay_seconds)
     finally:
+        if simulator_gateway is not None:
+            await simulator_gateway.close()
         await resources.close()
         print(json.dumps({"event": "worker_stopped", "status": "ok"}))
 

@@ -56,6 +56,8 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8000/api/telemetry", min_length=1, max_length=512
     )
     simulator_request_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    simulator_heartbeat_interval_seconds: float = Field(default=600, gt=0, le=86_400)
+    simulator_heartbeat_batch_size: int = Field(default=500, ge=1, le=2_000)
     simulator_enabled: bool = True
     simulator_generated_network_enabled: bool = True
     simulator_generation_seed: int = Field(default=7_307, ge=0)

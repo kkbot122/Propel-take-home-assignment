@@ -208,6 +208,12 @@ device timestamps.
 The worker also scans a bounded number of old, healthy device rows with
 `FOR UPDATE SKIP LOCKED`. Silence changes device health and its actively bound
 pole to `STALE`, never `DARK`, and schedules only the affected DTs for analysis.
+When the development simulator is enabled, the same worker emits periodic
+energized heartbeats through the public batch-ingestion endpoint. It excludes
+devices deliberately generated offline, explicitly missing devices, and every
+pole currently de-energized by an active simulated fault. This keeps the
+long-running subdivision demo fresh without turning intentional uncertainty into
+live evidence or allowing a heartbeat to restore a fault.
 
 ### 6.4 Pole State Store
 

@@ -1327,6 +1327,95 @@ async def test_two_independent_simulated_faults_remain_separate_through_restorat
 
 
 @pytest.mark.asyncio
+async def test_simulator_fault_injection_recovers_silence_stale_devices(
+    analysis_harness: AnalysisHarness,
+) -> None:
+    base = datetime.now(UTC)
+    session_factory = async_sessionmaker(analysis_harness.engine, expire_on_commit=False)
+    async with session_factory.begin() as session:
+        await session.execute(
+            update(DeviceHealth)
+            .where(DeviceHealth.device_id.in_(analysis_harness.device_ids.values()))
+            .values(
+                status=DeviceHealthStatus.STALE,
+                status_reason="device_silence_timeout",
+                updated_at=base,
+            )
+        )
+        await session.execute(
+            update(PoleState)
+            .where(PoleState.pole_id.in_(analysis_harness.pole_ids.values()))
+            .values(
+                state=PoleStatus.STALE,
+                reason="device_silence_timeout",
+                updated_at=base,
+            )
+        )
+
+    clock = MutableClock(base)
+    ingestion = TelemetryIngestionService(
+        PostgresPoleBindingResolver(analysis_harness.engine),
+        RedisTelemetryPublisher(analysis_harness.redis, analysis_harness.stream),
+        clock=clock,
+    )
+    gateway = AsgiSimulatorTelemetryGateway()
+    simulator = PostgresSimulatorService(analysis_harness.engine, gateway, clock=clock)
+    app = create_app(
+        settings=get_settings(),
+        telemetry_service=ingestion,
+        simulator_service=simulator,
+    )
+    gateway.app = app
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/simulator/faults", json={})
+
+    assert response.status_code == 201, response.json()
+    fault_id = UUID(response.json()["fault_id"])
+    analysis_harness.simulated_fault_ids.add(fault_id)
+    emitted_ids = {UUID(item) for item in response.json()["emitted_event_ids"]}
+    analysis_harness.event_ids.update(emitted_ids)
+    assert len(emitted_ids) == 4
+
+
+@pytest.mark.asyncio
+async def test_simulator_fault_without_reporters_returns_stable_conflict(
+    analysis_harness: AnalysisHarness,
+) -> None:
+    session_factory = async_sessionmaker(analysis_harness.engine, expire_on_commit=False)
+    async with session_factory.begin() as session:
+        await session.execute(
+            update(DeviceHealth)
+            .where(DeviceHealth.device_id.in_(analysis_harness.device_ids.values()))
+            .values(
+                status=DeviceHealthStatus.STALE,
+                status_reason="generated_offline",
+            )
+        )
+
+    gateway = AsgiSimulatorTelemetryGateway()
+    simulator = PostgresSimulatorService(analysis_harness.engine, gateway)
+    app = create_app(settings=get_settings(), simulator_service=simulator)
+    gateway.app = app
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/simulator/faults", json={})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "SIMULATOR_NO_TELEMETRY"
+    async with session_factory() as session:
+        active_count = await session.scalar(
+            select(func.count(SimulatedFault.fault_id)).where(
+                SimulatedFault.status == SimulatorFaultStatus.ACTIVE,
+                SimulatedFault.deenergized_pole_ids == ["P-002", "P-003", "P-004"],
+            )
+        )
+    assert active_count == 0
+
+
+@pytest.mark.asyncio
 async def test_simulator_fault_repair_is_verified_through_public_telemetry(
     analysis_harness: AnalysisHarness,
 ) -> None:

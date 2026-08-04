@@ -16,6 +16,7 @@ from propel.infra.simulator import (
     InvalidSimulatorNoiseError,
     InvalidSimulatorSpanError,
     MissingSimulatorDeviceError,
+    NoSimulatorTelemetryError,
     PostgresSimulatorService,
     SimulatorDatasetNotFoundError,
     SimulatorFaultNotFoundError,
@@ -116,6 +117,13 @@ async def inject_fault(
             status.HTTP_409_CONFLICT,
             "SIMULATOR_DEVICE_MISSING",
             "every simulated pole must have an active device",
+            retryable=False,
+        )
+    except NoSimulatorTelemetryError:
+        return error_response(
+            status.HTTP_409_CONFLICT,
+            "SIMULATOR_NO_TELEMETRY",
+            "the requested fault has no report-capable simulator devices",
             retryable=False,
         )
     except SimulatorTelemetryUnavailableError:
