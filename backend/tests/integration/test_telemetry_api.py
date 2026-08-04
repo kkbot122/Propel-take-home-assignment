@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -9,6 +10,7 @@ from redis.asyncio import Redis
 
 from propel.api.app import create_app
 from propel.infra.settings import Settings
+from propel.simulator.generation import generate_fault_telemetry, generate_network
 
 pytestmark = pytest.mark.integration
 
@@ -86,6 +88,47 @@ async def test_valid_telemetry_crosses_http_to_redis_boundary(redis_client: Redi
     assert unknown_response.json()["error"]["code"] == "UNKNOWN_POLE"
     assert conflict_response.status_code == 409
     assert conflict_response.json()["error"]["code"] == "DEVICE_BINDING_CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_generated_scenario_crosses_public_ingestion_boundary(redis_client: Redis) -> None:
+    settings = Settings()
+    network = generate_network()
+    scenario = next(item for item in network.scenarios if item.scenario_id == "noisy-span")
+    deliveries = generate_fault_telemetry(
+        network,
+        scenario,
+        datetime(2026, 8, 4, 14, 0, tzinfo=UTC),
+    )
+
+    async with running_api(settings) as client:
+        manifest_response = await client.get(
+            "/api/simulator/manifest", params={"dataset_id": network.dataset_id}
+        )
+        assert manifest_response.status_code == 200
+        assert manifest_response.json()["counts"]["poles"] == len(network.poles)
+        for delivery in deliveries:
+            command = delivery.command
+            response = await client.post(
+                "/api/telemetry",
+                json={
+                    "device_id": command.device_id,
+                    "pole_id": command.pole_id,
+                    "event": command.event.value,
+                    "energized": command.energized,
+                    "ts": command.device_timestamp.isoformat(),
+                    "seq": command.sequence,
+                    "battery_mv": command.battery_mv,
+                    "rssi": command.rssi,
+                    "fw": command.firmware,
+                },
+                headers={"x-propel-telemetry-origin": "simulator"},
+            )
+            assert response.status_code == 202
+
+    entries = await redis_client.xrange(settings.telemetry_stream_name)
+    assert len(entries) == len(deliveries)
+    assert all(fields["origin"] == "SIMULATOR" for _, fields in entries)
 
 
 @pytest.mark.asyncio

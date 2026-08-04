@@ -133,3 +133,41 @@ class NetworkOverviewView:
     name: str
     substation: NetworkSubstationView
     transformers: tuple[NetworkTransformerView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkFeederView:
+    feeder_id: str
+    name: str
+    substation_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkSubdivisionTransformerView:
+    dt_id: str
+    feeder_id: str
+    name: str
+    latitude: float
+    longitude: float
+    pin_code: str
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkBoundsView:
+    south: float
+    west: float
+    north: float
+    east: float
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkSubdivisionView:
+    dataset_id: str
+    generator_version: str
+    name: str
+    neighborhoods: tuple[str, ...]
+    bounds: NetworkBoundsView
+    substations: tuple[NetworkSubstationView, ...]
+    feeders: tuple[NetworkFeederView, ...]
+    transformers: tuple[NetworkSubdivisionTransformerView, ...]
+    topologies: tuple[NetworkTopologyView, ...]

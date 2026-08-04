@@ -160,3 +160,45 @@ class NetworkOverviewResponse(BaseModel):
     name: str
     substation: NetworkSubstationResponse
     transformers: list[NetworkTransformerResponse]
+
+
+class NetworkFeederResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    feeder_id: str
+    name: str
+    substation_id: str
+
+
+class NetworkSubdivisionTransformerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    dt_id: str
+    feeder_id: str
+    name: str
+    latitude: Annotated[float, Field(ge=-90, le=90)]
+    longitude: Annotated[float, Field(ge=-180, le=180)]
+    pin_code: str
+
+
+class NetworkBoundsResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    south: Annotated[float, Field(ge=-90, le=90)]
+    west: Annotated[float, Field(ge=-180, le=180)]
+    north: Annotated[float, Field(ge=-90, le=90)]
+    east: Annotated[float, Field(ge=-180, le=180)]
+
+
+class NetworkSubdivisionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    dataset_id: str
+    generator_version: str
+    name: str
+    neighborhoods: list[str]
+    bounds: NetworkBoundsResponse
+    substations: list[NetworkSubstationResponse]
+    feeders: list[NetworkFeederResponse]
+    transformers: list[NetworkSubdivisionTransformerResponse]
+    topologies: list[NetworkTopologyResponse]

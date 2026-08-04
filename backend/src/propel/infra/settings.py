@@ -51,6 +51,17 @@ class Settings(BaseSettings):
     )
     simulator_request_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
     simulator_enabled: bool = True
+    simulator_generated_network_enabled: bool = True
+    simulator_generation_seed: int = Field(default=7_307, ge=0)
+    simulator_generation_substations: int = Field(default=2, ge=1, le=20)
+    simulator_generation_feeders_per_substation: int = Field(default=2, ge=1, le=20)
+    simulator_generation_transformers_per_feeder: int = Field(default=4, ge=1, le=50)
+    simulator_generation_min_poles_per_transformer: int = Field(default=115, ge=4, le=500)
+    simulator_generation_max_poles_per_transformer: int = Field(default=135, ge=4, le=500)
+    simulator_generation_surveyed_transformer_ratio: float = Field(default=0.4, gt=0, lt=1)
+    simulator_generation_sensor_coverage_ratio: float = Field(default=0.91, ge=0, le=1)
+    simulator_generation_offline_device_ratio: float = Field(default=0.04, ge=0, le=1)
+    simulator_generation_firmware_12_ratio: float = Field(default=0.08, ge=0, le=1)
 
 
 @lru_cache

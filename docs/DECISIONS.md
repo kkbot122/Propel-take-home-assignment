@@ -406,6 +406,45 @@ anomaly, schedule, and unconfirmed fixtures are recorded in
 results as low confidence, counting silence as darkness, and displaying the
 evidence score as a percentage likelihood.
 
+## 2026-08-04 — Generate electrical truth before geography
+
+**Chosen:** `subdivision-v1` deterministically builds one rooted electrical tree
+per DT from an explicit configuration and seed, then lays that tree into bounded
+geographic coordinates with small positional noise. The default seed `7307`
+produces two substations, four feeders, sixteen DTs, 1,993 poles, and 1,814 active
+device bindings while the small backbone fixtures remain unchanged. Exact ratio
+selection uses stable SHA-256 ranks, and the canonical logical manifest has its
+own digest.
+
+The public registry contains surveyed edges for the configured DT share and
+geographically inferred edges for the remainder. Complete physical edges live in
+`simulator_topology_edges`, keyed to an immutable `generated_datasets` manifest;
+only simulator and evaluation code read them. The simulator can therefore inject
+a hidden physical span without allowing localization to see the answer. Scenario
+telemetry always enters through `POST /api/telemetry` and cannot write pole state
+directly.
+
+Uninstrumented poles start `NO_DEVICE`, independently offline devices start
+`STALE`, and firmware 1.2 loss silence is represented by
+`can_report_power_loss=false`. Fixed manifests cover surveyed and inferred spans,
+DT and feeder faults, planned work, independent simultaneous faults, all four
+message-noise modes, and partial restoration.
+
+**Reason:** Building geography first would accidentally make proximity the answer
+being evaluated. Separating physical truth from its incomplete observed projection
+lets fixed seeds test localization correctness, uncertainty calibration, and later
+load behavior without leaking simulator state into analysis.
+
+The main operator map uses a separate registry-safe subdivision response containing
+substations, feeders, DTs, public topology edges, current pole state, and bounded
+South Bengaluru coordinates. It never consumes the manifest or
+`simulator_topology_edges`. Feeder and DT filters keep the complete generated view
+operable without reducing the underlying network.
+
+**Rejected:** Random state hidden in process globals, resetting derived state on
+startup, using inferred MST edges as physical truth, and seeding one alert per
+generated pole.
+
 ## What we would do with two more weeks
 
 - Add a PostgreSQL inbox/outbox around queue publication.

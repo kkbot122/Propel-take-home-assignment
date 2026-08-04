@@ -21,8 +21,10 @@ from propel.infra.database.models import (
     DeviceHealth,
     DistributionTransformer,
     Feeder,
+    GeneratedDataset,
     Pole,
     SimulatedFault,
+    SimulatorTopologyEdge,
     TopologyEdge,
 )
 from propel.simulator.models import (
@@ -61,6 +63,10 @@ class MissingSimulatorDeviceError(Exception):
     pass
 
 
+class SimulatorDatasetNotFoundError(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class SimulatorDevice:
     internal_device_id: int
@@ -68,6 +74,8 @@ class SimulatorDevice:
     installed_firmware: str | None
     last_sequence: int | None
     firmware: str | None
+    health_status: DeviceHealthStatus | None
+    can_report_power_loss: bool | None
 
 
 class HttpSimulatorTelemetryGateway:
@@ -208,6 +216,23 @@ class PostgresSimulatorService:
         except SQLAlchemyError as error:
             raise SimulatorStoreUnavailableError from error
         return view
+
+    async def generated_manifest(self, dataset_id: str | None = None) -> dict[str, object]:
+        try:
+            async with self._session_factory() as session:
+                statement = select(GeneratedDataset.manifest)
+                if dataset_id is None:
+                    statement = statement.order_by(
+                        GeneratedDataset.created_at.desc(), GeneratedDataset.id.desc()
+                    )
+                else:
+                    statement = statement.where(GeneratedDataset.dataset_id == dataset_id)
+                manifest = await session.scalar(statement.limit(1))
+        except SQLAlchemyError as error:
+            raise SimulatorStoreUnavailableError from error
+        if manifest is None:
+            raise SimulatorDatasetNotFoundError
+        return manifest
 
     async def _inject_fixed_scope_fault(
         self,
@@ -398,11 +423,6 @@ class PostgresSimulatorService:
         parent_external_id: str,
         child_external_id: str,
     ) -> tuple[int, int, tuple[str, ...]]:
-        topology_version = await session.scalar(
-            select(func.max(TopologyEdge.topology_version)).where(
-                TopologyEdge.dt_id == transformer_id
-            )
-        )
         parent = aliased(Pole)
         child = aliased(Pole)
         edges = (
@@ -413,15 +433,35 @@ class PostgresSimulatorService:
                     child.id.label("child_id"),
                     child.pole_id.label("child_external_id"),
                 )
-                .select_from(TopologyEdge)
-                .outerjoin(parent, parent.id == TopologyEdge.parent_pole_id)
-                .join(child, child.id == TopologyEdge.child_pole_id)
-                .where(
-                    TopologyEdge.dt_id == transformer_id,
-                    TopologyEdge.topology_version == topology_version,
-                )
+                .select_from(SimulatorTopologyEdge)
+                .outerjoin(parent, parent.id == SimulatorTopologyEdge.parent_pole_id)
+                .join(child, child.id == SimulatorTopologyEdge.child_pole_id)
+                .where(SimulatorTopologyEdge.dt_id == transformer_id)
             )
         ).all()
+        if not edges:
+            topology_version = await session.scalar(
+                select(func.max(TopologyEdge.topology_version)).where(
+                    TopologyEdge.dt_id == transformer_id
+                )
+            )
+            edges = (
+                await session.execute(
+                    select(
+                        parent.id.label("parent_id"),
+                        parent.pole_id.label("parent_external_id"),
+                        child.id.label("child_id"),
+                        child.pole_id.label("child_external_id"),
+                    )
+                    .select_from(TopologyEdge)
+                    .outerjoin(parent, parent.id == TopologyEdge.parent_pole_id)
+                    .join(child, child.id == TopologyEdge.child_pole_id)
+                    .where(
+                        TopologyEdge.dt_id == transformer_id,
+                        TopologyEdge.topology_version == topology_version,
+                    )
+                )
+            ).all()
         requested = next(
             (
                 edge
@@ -457,6 +497,8 @@ class PostgresSimulatorService:
                     Device.installed_firmware,
                     DeviceHealth.last_sequence,
                     DeviceHealth.firmware,
+                    DeviceHealth.status,
+                    DeviceHealth.can_report_power_loss,
                 )
                 .join(DeviceBinding, DeviceBinding.pole_id == Pole.id)
                 .join(Device, Device.id == DeviceBinding.device_id)
@@ -471,11 +513,11 @@ class PostgresSimulatorService:
                 installed_firmware=row.installed_firmware,
                 last_sequence=row.last_sequence,
                 firmware=row.firmware,
+                health_status=row.status,
+                can_report_power_loss=row.can_report_power_loss,
             )
             for row in rows
         }
-        if set(result) != set(pole_ids):
-            raise MissingSimulatorDeviceError
         return result
 
     async def _injection_commands(
@@ -489,7 +531,11 @@ class PostgresSimulatorService:
     ) -> tuple[TelemetryCommand, ...]:
         pole_ids = ((parent_pole_id,) if parent_pole_id is not None else ()) + affected_ids
         rows = await self._device_rows(session, pole_ids)
+        if parent_pole_id is not None and parent_pole_id not in rows:
+            raise MissingSimulatorDeviceError
         if missing_device_pole_ids:
+            if any(pole_id not in rows for pole_id in missing_device_pole_ids):
+                raise MissingSimulatorDeviceError
             missing_device_ids = tuple(
                 rows[pole_id].internal_device_id for pole_id in missing_device_pole_ids
             )
@@ -504,9 +550,15 @@ class PostgresSimulatorService:
             )
         commands: list[TelemetryCommand] = []
         for pole_id in pole_ids:
-            row = rows[pole_id]
+            row = rows.get(pole_id)
+            if row is None:
+                continue
             is_affected = pole_id in affected_ids
             if is_affected and pole_id in omitted_loss_pole_ids:
+                continue
+            if row.health_status not in (None, DeviceHealthStatus.HEALTHY):
+                continue
+            if is_affected and row.can_report_power_loss is False:
                 continue
             commands.append(
                 self._command(
@@ -529,7 +581,9 @@ class PostgresSimulatorService:
         rows = await self._device_rows(session, affected_ids)
         commands: list[TelemetryCommand] = []
         for index, pole_id in enumerate(affected_ids):
-            row = rows[pole_id]
+            row = rows.get(pole_id)
+            if row is None or row.health_status not in (None, DeviceHealthStatus.HEALTHY):
+                continue
             boot_at = occurred_at + timedelta(milliseconds=index * 2)
             commands.append(self._command(row, pole_id, TelemetryEventType.BOOT, True, boot_at, 0))
             commands.append(

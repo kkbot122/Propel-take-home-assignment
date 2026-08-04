@@ -5,7 +5,7 @@ from uuid import UUID
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from sqlalchemy.sql.base import Executable
@@ -26,10 +26,12 @@ from propel.infra.database.models import (
     DeviceBinding,
     DistributionTransformer,
     Feeder,
+    GeneratedDataset,
     Incident,
     Pole,
     PoleState,
     ScheduledOutage,
+    SimulatorTopologyEdge,
     TelemetryEvent,
     TopologyEdge,
 )
@@ -50,6 +52,8 @@ MINIMUM_TABLES = {
     "pole_states",
     "device_health",
     "scheduled_outages",
+    "generated_datasets",
+    "simulator_topology_edges",
     "incidents",
     "incident_poles",
     "tickets",
@@ -76,8 +80,20 @@ async def test_schema_and_seed_are_complete_and_idempotent(database_engine: Asyn
     assert second_summary.devices == 10
     assert second_summary.bindings == 10
     assert second_summary.topology_edges == 10
-    assert second_summary.live_pole_states == 10
+    # Idempotent startup must preserve any newer telemetry-derived state rather than
+    # forcing the ten-pole fixture back to LIVE.
+    assert 0 <= second_summary.live_pole_states <= 10
     assert second_summary.scheduled_outages == 1
+    assert second_summary.generated_substations == 2
+    assert second_summary.generated_feeders == 4
+    assert second_summary.generated_transformers == 16
+    assert 1_800 <= second_summary.generated_poles <= 2_200
+    assert second_summary.generated_devices == round(second_summary.generated_poles * 0.91)
+    assert second_summary.generated_bindings == second_summary.generated_devices
+    assert second_summary.generated_topology_edges == second_summary.generated_poles
+    assert second_summary.generated_ground_truth_edges == second_summary.generated_poles
+    assert second_summary.generated_scheduled_outages == 1
+    assert second_summary.generated_logical_digest is not None
 
     async with database_engine.connect() as connection:
         table_names = set(
@@ -86,6 +102,25 @@ async def test_schema_and_seed_are_complete_and_idempotent(database_engine: Asyn
             )
         )
         assert MINIMUM_TABLES <= table_names
+
+        generated_dataset = (
+            await connection.execute(
+                select(
+                    GeneratedDataset.id,
+                    GeneratedDataset.dataset_id,
+                    GeneratedDataset.manifest,
+                    GeneratedDataset.logical_digest,
+                ).where(GeneratedDataset.dataset_id == second_summary.generated_dataset_id)
+            )
+        ).one()
+        assert generated_dataset.manifest["counts"]["poles"] == second_summary.generated_poles
+        assert generated_dataset.logical_digest == second_summary.generated_logical_digest
+        hidden_edge_count = await connection.scalar(
+            select(func.count(SimulatorTopologyEdge.id)).where(
+                SimulatorTopologyEdge.dataset_id == generated_dataset.id
+            )
+        )
+        assert hidden_edge_count == second_summary.generated_ground_truth_edges
 
         seeded_schedule = (
             await connection.execute(

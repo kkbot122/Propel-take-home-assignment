@@ -5,7 +5,7 @@ import type {
   Incident,
   NetworkOverview,
   NetworkPole,
-  NetworkTopology,
+  NetworkSubdivision,
   SimulatedFault,
   Ticket,
 } from './types'
@@ -50,20 +50,10 @@ export const api = {
   incident: (incidentId: string) =>
     requestJson<Incident>(`/api/incidents/${incidentId}`),
   ticket: (ticketId: string) => requestJson<Ticket>(`/api/tickets/${ticketId}`),
-  poles: async () =>
-    (
-      await Promise.all([
-        requestJson<NetworkPole[]>('/api/network/poles?dt_id=DT-001'),
-        requestJson<NetworkPole[]>('/api/network/poles?dt_id=DT-002'),
-        requestJson<NetworkPole[]>('/api/network/poles?dt_id=DT-003'),
-      ])
-    ).flat(),
-  topologies: () =>
-    Promise.all([
-      requestJson<NetworkTopology>('/api/network/topology/DT-001'),
-      requestJson<NetworkTopology>('/api/network/topology/DT-002'),
-      requestJson<NetworkTopology>('/api/network/topology/DT-003'),
-    ]),
+  subdivisionPoles: () =>
+    requestJson<NetworkPole[]>('/api/network/subdivision/poles'),
+  subdivision: () =>
+    requestJson<NetworkSubdivision>('/api/network/subdivision'),
   networkOverview: () =>
     requestJson<NetworkOverview>('/api/network/overview/FDR-001'),
   acknowledge: (ticketId: string) =>

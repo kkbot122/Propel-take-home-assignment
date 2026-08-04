@@ -345,6 +345,38 @@ When a crew marks work as resolved:
 
 An operator action alone cannot produce `VERIFIED` or `CLOSED`.
 
+### 6.10 Deterministic network and scenario generator
+
+Startup retains the ten-pole backbone fixtures and also materializes a configurable,
+seeded subdivision dataset. The default dataset contains two substations, four
+feeders, sixteen DTs, and approximately two thousand poles. Each DT is constructed
+as one electrical tree before coordinates and small GPS noise are assigned, so
+geography can never become the simulator's physical truth by accident.
+
+The generator stores two projections. `topology_edges` contains surveyed trees or
+the `geo-mst-v1` inference derived only from registry-safe coordinates. The separate
+`simulator_topology_edges` table contains the complete electrical tree and is read
+only by simulator/evaluation code. Localization snapshots never join that table.
+The canonical manifest records seed, configuration, assets, device properties,
+both topology projections, fixed scenarios, and a SHA-256 logical digest. Reusing
+a dataset ID with different content fails startup and requires a generator-version
+bump.
+
+Devices cover 91% of poles by default. Offline devices start `STALE`, uncovered
+poles start `NO_DEVICE`, and firmware 1.2 devices are marked unable to report a
+loss; none of these conditions manufacture `DARK` evidence. Scenario deliveries
+include omissions, duplicates, delay metadata, out-of-order sequences, simultaneous
+faults, and partial or complete restoration. Tests submit generated commands to
+the public telemetry API, leaving Redis ordering and PostgreSQL state derivation
+identical to real device traffic.
+
+The operator map reads a registry-safe subdivision projection rather than the
+simulator manifest. That projection combines the latest generated assets with the
+ten-pole backbone, exposes only public topology edges, and supplies padded bounds
+for Anjanapura, Konanakunte, Kothnur, and JP Nagar. The UI locks navigation to
+those bounds and filters the approximately two-thousand-pole view by feeder or DT.
+Hidden physical edges and scenario answers remain simulator-only.
+
 ## 7. Core data model
 
 ### Substation
@@ -769,8 +801,11 @@ The exact schema will be maintained in generated OpenAPI documentation. Planned 
 | `GET`  | `/api/network/overview/{feeder_id}` | Read feeder source and DT map assets        |
 | `GET`  | `/api/network/poles`                | Read poles for map display                 |
 | `GET`  | `/api/network/topology/{dt_id}`     | Read surveyed or inferred DT topology      |
+| `GET`  | `/api/network/subdivision`          | Read bounded, registry-safe subdivision assets and topology |
+| `GET`  | `/api/network/subdivision/poles`    | Read current pole state for the subdivision map |
 | `GET`  | `/api/scheduled-outages`            | Read current scheduled outages             |
 | `POST` | `/api/simulator/faults`             | Inject a fixed fault with optional telemetry noise |
+| `GET`  | `/api/simulator/manifest`           | Read a generated scenario and ground-truth manifest |
 | `POST` | `/api/simulator/faults/{id}/repair` | Emit restoration telemetry for a fault     |
 | `POST` | `/api/simulator/reset`              | Repair every active simulated fault        |
 | `POST` | `/api/simulator/noise`              | Reserved for later independent noise       |

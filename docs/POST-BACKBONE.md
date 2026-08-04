@@ -28,7 +28,7 @@ Optimize in this order:
 - [x] PB-04 — Missing-device corridors and degraded precision
 - [x] PB-05 — Unknown-topology inference and localization
 - [x] PB-06 — Confidence scoring and evidence calibration
-- [ ] PB-07 — Realistic multi-feeder network and telemetry generator
+- [x] PB-07 — Realistic multi-feeder network and telemetry generator
 - [ ] PB-08 — Batch ingestion, reliability, and measured performance
 - [ ] PB-09 — Operator diagnostics and deployment hardening
 - [ ] PB-10 — Release acceptance and submission packaging
@@ -353,38 +353,38 @@ realistic subdivision-scale scenarios suitable for correctness and load tests.
 
 ### Network generation
 
-- [ ] Generate multiple substations/feeders, multiple DTs per feeder, branches,
+- [x] Generate multiple substations/feeders, multiple DTs per feeder, branches,
       terminal poles, and varied radial depths.
-- [ ] Generate a configurable mix of surveyed and unknown-topology DTs.
-- [ ] Preserve hidden electrical ground truth separately from registry inputs.
-- [ ] Generate valid coordinates, PIN codes, transformer assignments, and versions.
-- [ ] Target a few thousand poles while retaining the four-pole backbone fixture.
-- [ ] Make every dataset reproducible from an explicit seed and configuration.
-- [ ] Validate connectivity, acyclicity, containment, and external-ID uniqueness.
+- [x] Generate a configurable mix of surveyed and unknown-topology DTs.
+- [x] Preserve hidden electrical ground truth separately from registry inputs.
+- [x] Generate valid coordinates, PIN codes, transformer assignments, and versions.
+- [x] Target a few thousand poles while retaining the four-pole backbone fixture.
+- [x] Make every dataset reproducible from an explicit seed and configuration.
+- [x] Validate connectivity, acyclicity, containment, and external-ID uniqueness.
 
 ### Device and telemetry generation
 
-- [ ] Model approximately 91% sensor coverage as configurable input.
-- [ ] Model independently offline devices without treating silence as darkness.
-- [ ] Include firmware 1.2 devices that may become silent on power loss.
-- [ ] Generate missing loss messages, duplicates, delays, and out-of-order events.
-- [ ] Generate span, DT, feeder, scheduled, and simultaneous faults.
-- [ ] Generate partial and complete restoration sequences.
-- [ ] Keep simulator physical state separate from derived application state.
-- [ ] Expose scenario manifests for evaluator comparison.
+- [x] Model approximately 91% sensor coverage as configurable input.
+- [x] Model independently offline devices without treating silence as darkness.
+- [x] Include firmware 1.2 devices that may become silent on power loss.
+- [x] Generate missing loss messages, duplicates, delays, and out-of-order events.
+- [x] Generate span, DT, feeder, scheduled, and simultaneous faults.
+- [x] Generate partial and complete restoration sequences.
+- [x] Keep simulator physical state separate from derived application state.
+- [x] Expose scenario manifests for evaluator comparison.
 
 ### Required tests
 
-- [ ] The same seed produces byte-for-byte equivalent logical ground truth.
-- [ ] Different seeds preserve all graph and identity invariants.
-- [ ] Surveyed/inferred proportions and sensor coverage match configured bounds.
-- [ ] Generated telemetry respects device bindings and sequence rules.
-- [ ] Fixed regression seeds cover every supported fault class and precision.
-- [ ] Generated scenarios run through public ingestion rather than direct state writes.
+- [x] The same seed produces byte-for-byte equivalent logical ground truth.
+- [x] Different seeds preserve all graph and identity invariants.
+- [x] Surveyed/inferred proportions and sensor coverage match configured bounds.
+- [x] Generated telemetry respects device bindings and sequence rules.
+- [x] Fixed regression seeds cover every supported fault class and precision.
+- [x] Generated scenarios run through public ingestion rather than direct state writes.
 
 ### Exit condition
 
-- [ ] A fixed scenario suite represents the target subdivision scale and every
+- [x] A fixed scenario suite represents the target subdivision scale and every
       supported uncertainty mode reproducibly.
 
 ---

@@ -2,7 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 
 import { api, errorMessage } from './api/client'
-import type { Incident, InjectFaultRequest, SimulatedFault, Ticket } from './api/types'
+import type {
+  Incident,
+  InjectFaultRequest,
+  NetworkSubdivision,
+  SimulatedFault,
+  Ticket,
+} from './api/types'
 import { IncidentDetail } from './components/IncidentDetail'
 import { IncidentList } from './components/IncidentList'
 import { NetworkMap } from './components/NetworkMap'
@@ -70,6 +76,8 @@ function faultExplainsIncident(fault: SimulatedFault, incident: Incident | null)
 export function App() {
   const queryClient = useQueryClient()
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null)
+  const [selectedFeederId, setSelectedFeederId] = useState('ALL')
+  const [selectedTransformerId, setSelectedTransformerId] = useState('ALL')
   const [activeFaults, setActiveFaults] = useState<SimulatedFault[]>(storedActiveFaults)
   const [commandMessage, setCommandMessage] = useState<string | null>(null)
 
@@ -92,20 +100,14 @@ export function App() {
     retry: 1,
   })
   const polesQuery = useQuery({
-    queryKey: ['network', 'poles', 'FDR-001'],
-    queryFn: api.poles,
+    queryKey: ['network', 'subdivision', 'poles'],
+    queryFn: api.subdivisionPoles,
     refetchInterval: POLL_INTERVAL_MS,
     retry: 1,
   })
-  const topologyQuery = useQuery({
-    queryKey: ['network', 'topology', 'FDR-001'],
-    queryFn: api.topologies,
-    staleTime: Number.POSITIVE_INFINITY,
-    retry: 1,
-  })
-  const networkOverviewQuery = useQuery({
-    queryKey: ['network', 'overview', 'FDR-001'],
-    queryFn: api.networkOverview,
+  const subdivisionQuery = useQuery({
+    queryKey: ['network', 'subdivision'],
+    queryFn: api.subdivision,
     staleTime: Number.POSITIVE_INFINITY,
     retry: 1,
   })
@@ -129,6 +131,46 @@ export function App() {
     [effectiveSelectedIncidentId, incidents],
   )
   const selectedIncident: Incident | null = incidentQuery.data ?? selectedSummary
+  const transformerOptions = useMemo(
+    () =>
+      (subdivisionQuery.data?.transformers ?? []).filter(
+        (transformer) =>
+          selectedFeederId === 'ALL' || transformer.feeder_id === selectedFeederId,
+      ),
+    [selectedFeederId, subdivisionQuery.data],
+  )
+  const filteredSubdivision = useMemo<NetworkSubdivision | null>(() => {
+    const subdivision = subdivisionQuery.data
+    if (!subdivision) return null
+    const transformers = subdivision.transformers.filter(
+      (transformer) =>
+        (selectedFeederId === 'ALL' || transformer.feeder_id === selectedFeederId) &&
+        (selectedTransformerId === 'ALL' || transformer.dt_id === selectedTransformerId),
+    )
+    const transformerIds = new Set(transformers.map((transformer) => transformer.dt_id))
+    const feederIds = new Set(transformers.map((transformer) => transformer.feeder_id))
+    const feeders = subdivision.feeders.filter((feeder) => feederIds.has(feeder.feeder_id))
+    const substationIds = new Set(feeders.map((feeder) => feeder.substation_id))
+    return {
+      ...subdivision,
+      substations: subdivision.substations.filter((substation) =>
+        substationIds.has(substation.substation_id),
+      ),
+      feeders,
+      transformers,
+      topologies: subdivision.topologies.filter((topology) =>
+        transformerIds.has(topology.dt_id),
+      ),
+    }
+  }, [selectedFeederId, selectedTransformerId, subdivisionQuery.data])
+  const visibleTransformerIds = useMemo(
+    () => new Set(filteredSubdivision?.transformers.map((item) => item.dt_id) ?? []),
+    [filteredSubdivision],
+  )
+  const visiblePoles = useMemo(
+    () => (polesQuery.data ?? []).filter((pole) => visibleTransformerIds.has(pole.dt_id)),
+    [polesQuery.data, visibleTransformerIds],
+  )
   const selectedSimulatorFault =
     activeFaults.find((fault) => faultExplainsIncident(fault, selectedIncident)) ?? null
   const selectedTicketId = selectedIncident?.ticket_id ?? null
@@ -146,7 +188,7 @@ export function App() {
       queryClient.invalidateQueries({ queryKey: ['incidents'] }),
       queryClient.invalidateQueries({ queryKey: ['incident'] }),
       queryClient.invalidateQueries({ queryKey: ['ticket'] }),
-      queryClient.invalidateQueries({ queryKey: ['network', 'poles'] }),
+      queryClient.invalidateQueries({ queryKey: ['network', 'subdivision', 'poles'] }),
     ])
   }
 
@@ -205,7 +247,7 @@ export function App() {
     incidentsQuery.dataUpdatedAt,
     suppressedIncidentsQuery.dataUpdatedAt,
     polesQuery.dataUpdatedAt,
-    networkOverviewQuery.dataUpdatedAt,
+    subdivisionQuery.dataUpdatedAt,
     incidentQuery.dataUpdatedAt,
     ticketQuery.dataUpdatedAt,
   )
@@ -214,8 +256,7 @@ export function App() {
     incidentsQuery.error,
     suppressedIncidentsQuery.error,
     polesQuery.error,
-    topologyQuery.error,
-    networkOverviewQuery.error,
+    subdivisionQuery.error,
     incidentQuery.error,
     ticketQuery.error,
   )
@@ -452,40 +493,85 @@ export function App() {
         <section className="panel map-panel" aria-labelledby="map-title">
           <div className="panel-heading map-heading">
             <div>
-              <p className="section-label">Surveyed + inferred · three topology snapshots</p>
-              <h2 id="map-title">FDR-001 network</h2>
+              <p className="section-label">
+                Anjanapura · Konanakunte · Kothnur · JP Nagar
+              </p>
+              <h2 id="map-title">
+                {subdivisionQuery.data?.name ?? 'South Bengaluru subdivision'}
+              </h2>
             </div>
-            <span className="map-focus-label">
-              {selectedIncident
-                ? `Focused · ${selectedIncident.suspected_asset_id
-                    .replace('->', ' → ')
-                    .replace('..', ' ⇢ ')}`
-                : 'Network overview'}
-            </span>
+            <div className="map-heading-tools">
+              <span className="map-focus-label">
+                {selectedIncident
+                  ? `Focused · ${selectedIncident.suspected_asset_id
+                      .replace('->', ' → ')
+                      .replace('..', ' ⇢ ')}`
+                  : 'Subdivision overview'}
+              </span>
+              <div className="map-filters" aria-label="Network map filters">
+                <label>
+                  <span>Feeder</span>
+                  <select
+                    aria-label="Filter map by feeder"
+                    value={selectedFeederId}
+                    onChange={(event) => {
+                      setSelectedFeederId(event.target.value)
+                      setSelectedTransformerId('ALL')
+                    }}
+                  >
+                    <option value="ALL">All feeders</option>
+                    {subdivisionQuery.data?.feeders.map((feeder) => (
+                      <option key={feeder.feeder_id} value={feeder.feeder_id}>
+                        {feeder.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Transformer</span>
+                  <select
+                    aria-label="Filter map by transformer"
+                    value={selectedTransformerId}
+                    onChange={(event) => setSelectedTransformerId(event.target.value)}
+                  >
+                    <option value="ALL">All DTs</option>
+                    {transformerOptions.map((transformer) => (
+                      <option key={transformer.dt_id} value={transformer.dt_id}>
+                        {transformer.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
           </div>
           {(polesQuery.isPending && !polesQuery.data) ||
-          (networkOverviewQuery.isPending && !networkOverviewQuery.data) ? (
+          (subdivisionQuery.isPending && !subdivisionQuery.data) ? (
             <div className="map-loading" role="status">
               <span className="spinner" aria-hidden="true" />
-              Loading surveyed network…
+              Loading subdivision network…
             </div>
           ) : (
             <NetworkMap
-              poles={polesQuery.data ?? []}
-              topologies={topologyQuery.data ?? []}
-              overview={networkOverviewQuery.data ?? null}
+              poles={visiblePoles}
+              subdivision={filteredSubdivision}
               selectedIncident={selectedIncident}
+              showPoleLabels={selectedTransformerId !== 'ALL'}
             />
           )}
           <div className="map-footer">
             <span>
-              {networkOverviewQuery.data?.transformers.length ?? 0} DTs ·{' '}
-              {topologyQuery.data?.filter((topology) => topology.source === 'INFERRED').length ?? 0}{' '}
-              inferred
+              {filteredSubdivision?.substations.length ?? 0} substations ·{' '}
+              {filteredSubdivision?.feeders.length ?? 0} feeders ·{' '}
+              {filteredSubdivision?.transformers.length ?? 0} DTs
             </span>
             <span>
-              {polesQuery.data?.filter((pole) => pole.state === 'LIVE').length ?? 0}/
-              {polesQuery.data?.length ?? 0} poles live
+              {visiblePoles.filter((pole) => pole.state === 'LIVE').length}/{visiblePoles.length}{' '}
+              poles live ·{' '}
+              {filteredSubdivision?.topologies.filter(
+                (topology) => topology.source === 'INFERRED',
+              ).length ?? 0}{' '}
+              inferred DTs
             </span>
           </div>
         </section>
@@ -520,7 +606,7 @@ export function App() {
       </section>
 
       <footer className="app-footer">
-        <span>Propel · PB-05 inferred topology</span>
+        <span>Propel · PB-07 subdivision network</span>
         <span>Polling every 5 seconds · verification remains telemetry-only</span>
       </footer>
     </main>

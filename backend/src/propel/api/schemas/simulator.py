@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,10 +11,10 @@ class InjectFixedFaultRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fault_type: SimulatorFaultType = SimulatorFaultType.SPAN_FAULT
-    feeder_id: Literal["FDR-001"] = "FDR-001"
-    dt_id: Literal["DT-001", "DT-002", "DT-003"] = "DT-001"
-    parent_pole_id: Literal["P-001", "P-101", "P-201"] = "P-001"
-    child_pole_id: Literal["P-002", "P-102", "P-202"] = "P-002"
+    feeder_id: str = Field(default="FDR-001", min_length=1, max_length=64)
+    dt_id: str = Field(default="DT-001", min_length=1, max_length=64)
+    parent_pole_id: str = Field(default="P-001", min_length=1, max_length=64)
+    child_pole_id: str = Field(default="P-002", min_length=1, max_length=64)
     missing_device_pole_ids: list[str] = Field(default_factory=list, max_length=6)
     omit_loss_pole_ids: list[str] = Field(default_factory=list, max_length=6)
 
@@ -39,3 +39,19 @@ class SimulatedFaultResponse(BaseModel):
 class SimulatorResetResponse(BaseModel):
     status: Literal["reset"] = "reset"
     repaired_faults: list[SimulatedFaultResponse]
+
+
+class GeneratedNetworkManifestResponse(BaseModel):
+    dataset_id: str
+    generator_version: str
+    seed: int
+    config: dict[str, Any]
+    counts: dict[str, int]
+    substations: list[dict[str, Any]]
+    feeders: list[dict[str, Any]]
+    transformers: list[dict[str, Any]]
+    poles: list[dict[str, Any]]
+    devices: list[dict[str, Any]]
+    ground_truth_edges: list[dict[str, Any]]
+    visible_edges: list[dict[str, Any]]
+    scenarios: list[dict[str, Any]]

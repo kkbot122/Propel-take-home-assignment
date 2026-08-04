@@ -50,6 +50,7 @@ from propel.infra.telemetry import (
     RedisTelemetryPublisher,
 )
 from propel.infra.telemetry_processor import PostgresTelemetryProcessor
+from propel.simulator.generation import generate_network
 from propel.simulator.models import SimulatorEmissionReceipt
 from propel.telemetry.consumer import RedisTelemetryConsumer
 from propel.telemetry.ingestion import (
@@ -478,6 +479,8 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
         overview_response = await client.get("/api/network/overview/FDR-001")
         poles_response = await client.get("/api/network/poles", params={"dt_id": "DT-001"})
         topology_response = await client.get("/api/network/topology/DT-001")
+        subdivision_response = await client.get("/api/network/subdivision")
+        subdivision_poles_response = await client.get("/api/network/subdivision/poles")
         skipped_response = await client.post(
             f"/api/tickets/{incident.ticket_id}/resolve",
             json={"actor": "operator-1", "reason": "skipped transition attempt"},
@@ -530,6 +533,36 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
     assert topology_response.status_code == 200
     assert topology_response.json()["topology_version"] == 1
     assert len(topology_response.json()["spans"]) == 4
+    assert subdivision_response.status_code == 200
+    subdivision = subdivision_response.json()
+    subdivision_poles = subdivision_poles_response.json()
+    assert subdivision["name"] == "South Bengaluru subdivision"
+    assert subdivision["neighborhoods"] == [
+        "Anjanapura",
+        "Konanakunte",
+        "Kothnur",
+        "JP Nagar",
+    ]
+    assert len(subdivision["substations"]) == 3
+    assert len(subdivision["feeders"]) == 5
+    assert len(subdivision["transformers"]) == 19
+    assert len(subdivision["topologies"]) == 19
+    assert subdivision_poles_response.status_code == 200
+    assert 1_810 <= len(subdivision_poles) <= 2_210
+    assert sum(len(topology["spans"]) for topology in subdivision["topologies"]) == len(
+        subdivision_poles
+    )
+    assert {topology["source"] for topology in subdivision["topologies"]} == {
+        "SURVEYED",
+        "INFERRED",
+    }
+    assert all(
+        subdivision["bounds"]["south"] <= pole["latitude"] <= subdivision["bounds"]["north"]
+        and subdivision["bounds"]["west"] <= pole["longitude"] <= subdivision["bounds"]["east"]
+        for pole in subdivision_poles
+    )
+    assert "simulator_topology_edges" not in subdivision_response.text
+    assert "ground_truth" not in subdivision_response.text
     assert skipped_response.status_code == 409
     assert skipped_response.json()["error"]["code"] == "INVALID_TICKET_TRANSITION"
     assert acknowledge_response.status_code == 200
@@ -954,6 +987,63 @@ async def test_scope_faults_classify_through_public_simulator_telemetry(
 
 
 @pytest.mark.asyncio
+async def test_generated_hidden_span_uses_physical_truth_and_public_ingestion(
+    analysis_harness: AnalysisHarness,
+) -> None:
+    network = generate_network()
+    scenario = next(item for item in network.scenarios if item.scenario_id == "inferred-span")
+    fault = scenario.faults[0]
+    assert fault.dt_id is not None
+    assert fault.parent_pole_id is not None
+    assert fault.child_pole_id is not None
+    children: dict[str, list[str]] = {}
+    for edge in network.ground_truth_edges:
+        if edge.dt_id == fault.dt_id and edge.parent_pole_id is not None:
+            children.setdefault(edge.parent_pole_id, []).append(edge.child_pole_id)
+    expected_affected: list[str] = []
+    pending = [fault.child_pole_id]
+    while pending:
+        pole_id = pending.pop(0)
+        expected_affected.append(pole_id)
+        pending.extend(sorted(children.get(pole_id, ())))
+
+    clock = MutableClock(datetime.now(UTC))
+    ingestion = TelemetryIngestionService(
+        PostgresPoleBindingResolver(analysis_harness.engine),
+        RedisTelemetryPublisher(analysis_harness.redis, analysis_harness.stream),
+        clock=clock,
+    )
+    gateway = AsgiSimulatorTelemetryGateway()
+    simulator = PostgresSimulatorService(analysis_harness.engine, gateway, clock=clock)
+    app = create_app(
+        settings=get_settings(),
+        telemetry_service=ingestion,
+        simulator_service=simulator,
+    )
+    gateway.app = app
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/simulator/faults",
+                json={
+                    "fault_type": "SPAN_FAULT",
+                    "dt_id": fault.dt_id,
+                    "parent_pole_id": fault.parent_pole_id,
+                    "child_pole_id": fault.child_pole_id,
+                },
+            )
+
+    assert response.status_code == 201, response.json()
+    injected = response.json()
+    simulated_fault_id = UUID(injected["fault_id"])
+    analysis_harness.simulated_fault_ids.add(simulated_fault_id)
+    analysis_harness.event_ids.update(UUID(item) for item in injected["emitted_event_ids"])
+    assert injected["deenergized_pole_ids"] == expected_affected
+    assert 0 < len(injected["emitted_event_ids"]) < len(expected_affected) + 1
+
+
+@pytest.mark.asyncio
 async def test_missing_device_noise_persists_and_serves_corridor_precision(
     analysis_harness: AnalysisHarness,
 ) -> None:
@@ -1056,7 +1146,9 @@ async def test_missing_device_noise_persists_and_serves_corridor_precision(
             assert repair_response.status_code == 200
             repair_events = repair_response.json()["emitted_event_ids"]
             analysis_harness.event_ids.update(UUID(item) for item in repair_events)
-            assert await consumer.consume_new_once() == 6
+            # The simulated missing device remains silent during restoration;
+            # only the two healthy devices emit boot/restored pairs.
+            assert await consumer.consume_new_once() == 4
 
             clock.value = base + timedelta(seconds=24)
             verified_count = await incidents.verify_restorations_once(

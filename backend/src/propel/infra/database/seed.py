@@ -1,9 +1,10 @@
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import InstrumentedAttribute
 
 from propel.domain.enums import (
     DeviceHealthStatus,
@@ -17,11 +18,19 @@ from propel.infra.database.models import (
     DeviceHealth,
     DistributionTransformer,
     Feeder,
+    GeneratedDataset,
     Pole,
     PoleState,
     ScheduledOutage,
+    SimulatorTopologyEdge,
     Substation,
     TopologyEdge,
+)
+from propel.simulator.generation import (
+    GeneratedDevice,
+    GeneratedNetwork,
+    NetworkGenerationConfig,
+    generate_network,
 )
 from propel.topology.inference import infer_geographic_topology
 from propel.topology.models import TopologyPole, TopologyRequest
@@ -38,6 +47,32 @@ class SeedSummary:
     topology_edges: int
     live_pole_states: int
     scheduled_outages: int
+    generated_dataset_id: str | None = None
+    generated_substations: int = 0
+    generated_feeders: int = 0
+    generated_transformers: int = 0
+    generated_poles: int = 0
+    generated_devices: int = 0
+    generated_bindings: int = 0
+    generated_topology_edges: int = 0
+    generated_ground_truth_edges: int = 0
+    generated_scheduled_outages: int = 0
+    generated_logical_digest: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedSeedSummary:
+    generated_dataset_id: str
+    generated_substations: int
+    generated_feeders: int
+    generated_transformers: int
+    generated_poles: int
+    generated_devices: int
+    generated_bindings: int
+    generated_topology_edges: int
+    generated_ground_truth_edges: int
+    generated_scheduled_outages: int
+    generated_logical_digest: str
 
 
 def require_seed_value[T](value: T | None, label: str) -> T:
@@ -46,10 +81,20 @@ def require_seed_value[T](value: T | None, label: str) -> T:
     return value
 
 
-async def seed_database(engine: AsyncEngine) -> SeedSummary:
+async def seed_database(
+    engine: AsyncEngine,
+    *,
+    generation_config: NetworkGenerationConfig | None = None,
+    include_generated_network: bool = True,
+) -> SeedSummary:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with session_factory.begin() as session:
-        return await seed_surveyed_network(session)
+        fixture_summary = await seed_surveyed_network(session)
+        if not include_generated_network:
+            return fixture_summary
+        network = generate_network(generation_config)
+        generated_summary = await seed_generated_network(session, network)
+        return replace(fixture_summary, **asdict(generated_summary))
 
 
 async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
@@ -316,3 +361,340 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
         live_pole_states=live_count or 0,
         scheduled_outages=scheduled_outage_count or 0,
     )
+
+
+async def seed_generated_network(
+    session: AsyncSession,
+    network: GeneratedNetwork,
+) -> GeneratedSeedSummary:
+    seeded_at = datetime.now(UTC)
+    binding_valid_from = datetime(2020, 1, 1, tzinfo=UTC)
+    manifest = network.as_manifest()
+    await session.execute(
+        insert(GeneratedDataset)
+        .values(
+            dataset_id=network.dataset_id,
+            generator_version=network.generator_version,
+            seed=network.config.seed,
+            config=asdict(network.config),
+            manifest=manifest,
+            logical_digest=network.logical_digest,
+        )
+        .on_conflict_do_nothing(constraint="uq_generated_datasets_dataset_id")
+    )
+    dataset_row = (
+        await session.execute(
+            select(GeneratedDataset.id, GeneratedDataset.logical_digest).where(
+                GeneratedDataset.dataset_id == network.dataset_id
+            )
+        )
+    ).one_or_none()
+    if dataset_row is None:
+        raise RuntimeError("generated dataset manifest was not persisted")
+    if dataset_row.logical_digest != network.logical_digest:
+        raise RuntimeError(
+            "generated dataset changed without a generator version change; bump the version"
+        )
+
+    await session.execute(
+        insert(Substation)
+        .values(
+            [
+                {
+                    "substation_id": item.substation_id,
+                    "name": item.name,
+                    "latitude": item.latitude,
+                    "longitude": item.longitude,
+                    "pin_code": item.pin_code,
+                }
+                for item in network.substations
+            ]
+        )
+        .on_conflict_do_nothing(constraint="uq_substations_substation_id")
+    )
+    substation_ids = await _external_id_map(
+        session,
+        Substation.substation_id,
+        Substation.id,
+        tuple(item.substation_id for item in network.substations),
+    )
+
+    await session.execute(
+        insert(Feeder)
+        .values(
+            [
+                {
+                    "feeder_id": item.feeder_id,
+                    "substation_id": substation_ids[item.substation_id],
+                    "name": item.name,
+                }
+                for item in network.feeders
+            ]
+        )
+        .on_conflict_do_nothing(constraint="uq_feeders_feeder_id")
+    )
+    feeder_ids = await _external_id_map(
+        session,
+        Feeder.feeder_id,
+        Feeder.id,
+        tuple(item.feeder_id for item in network.feeders),
+    )
+
+    await session.execute(
+        insert(DistributionTransformer)
+        .values(
+            [
+                {
+                    "dt_id": item.dt_id,
+                    "feeder_id": feeder_ids[item.feeder_id],
+                    "name": item.name,
+                    "latitude": item.latitude,
+                    "longitude": item.longitude,
+                    "pin_code": item.pin_code,
+                }
+                for item in network.transformers
+            ]
+        )
+        .on_conflict_do_nothing(constraint="uq_distribution_transformers_dt_id")
+    )
+    transformer_ids = await _external_id_map(
+        session,
+        DistributionTransformer.dt_id,
+        DistributionTransformer.id,
+        tuple(item.dt_id for item in network.transformers),
+    )
+
+    await session.execute(
+        insert(Pole)
+        .values(
+            [
+                {
+                    "pole_id": item.pole_id,
+                    "dt_id": transformer_ids[item.dt_id],
+                    "feeder_id": feeder_ids[item.feeder_id],
+                    "latitude": item.latitude,
+                    "longitude": item.longitude,
+                    "pin_code": item.pin_code,
+                }
+                for item in network.poles
+            ]
+        )
+        .on_conflict_do_nothing(constraint="uq_poles_pole_id")
+    )
+    pole_ids = await _external_id_map(
+        session,
+        Pole.pole_id,
+        Pole.id,
+        tuple(item.pole_id for item in network.poles),
+    )
+
+    await session.execute(
+        insert(Device)
+        .values(
+            [
+                {
+                    "device_id": item.device_id,
+                    "installed_firmware": item.firmware,
+                }
+                for item in network.devices
+            ]
+        )
+        .on_conflict_do_nothing(constraint="uq_devices_device_id")
+    )
+    device_ids = await _external_id_map(
+        session,
+        Device.device_id,
+        Device.id,
+        tuple(item.device_id for item in network.devices),
+    )
+    device_by_pole = {item.pole_id: item for item in network.devices}
+
+    await session.execute(
+        insert(DeviceBinding)
+        .values(
+            [
+                {
+                    "device_id": device_ids[item.device_id],
+                    "pole_id": pole_ids[item.pole_id],
+                    "valid_from": binding_valid_from,
+                }
+                for item in network.devices
+            ]
+        )
+        .on_conflict_do_nothing()
+    )
+    await session.execute(
+        insert(PoleState)
+        .values(
+            [
+                {
+                    "pole_id": pole_ids[pole.pole_id],
+                    "state": _initial_pole_status(device_by_pole.get(pole.pole_id)),
+                    "received_at": seeded_at,
+                    "firmware": (
+                        device_by_pole[pole.pole_id].firmware
+                        if pole.pole_id in device_by_pole
+                        else None
+                    ),
+                    "battery_mv": (
+                        device_by_pole[pole.pole_id].battery_mv
+                        if pole.pole_id in device_by_pole
+                        else None
+                    ),
+                    "rssi": (
+                        device_by_pole[pole.pole_id].rssi
+                        if pole.pole_id in device_by_pole
+                        else None
+                    ),
+                    "reason": "generated_network_seed",
+                }
+                for pole in network.poles
+            ]
+        )
+        .on_conflict_do_nothing(index_elements=[PoleState.pole_id])
+    )
+    await session.execute(
+        insert(DeviceHealth)
+        .values(
+            [
+                {
+                    "device_id": device_ids[item.device_id],
+                    "status": item.health_status,
+                    "last_seen_at": (
+                        seeded_at
+                        if item.health_status == DeviceHealthStatus.HEALTHY
+                        else seeded_at - timedelta(hours=1)
+                    ),
+                    "firmware": item.firmware,
+                    "battery_mv": item.battery_mv,
+                    "rssi": item.rssi,
+                    "status_reason": (
+                        "generated_healthy"
+                        if item.health_status == DeviceHealthStatus.HEALTHY
+                        else "generated_offline"
+                    ),
+                    "can_report_power_loss": item.can_report_power_loss,
+                }
+                for item in network.devices
+            ]
+        )
+        .on_conflict_do_nothing(index_elements=[DeviceHealth.device_id])
+    )
+    await session.execute(
+        insert(TopologyEdge)
+        .values(
+            [
+                {
+                    "dt_id": transformer_ids[item.dt_id],
+                    "parent_pole_id": (
+                        pole_ids[item.parent_pole_id] if item.parent_pole_id is not None else None
+                    ),
+                    "child_pole_id": pole_ids[item.child_pole_id],
+                    "source": item.source,
+                    "distance_m": item.distance_m,
+                    "edge_confidence": item.edge_confidence,
+                    "inference_version": item.inference_version,
+                    "topology_version": item.topology_version,
+                }
+                for item in network.visible_edges
+            ]
+        )
+        .on_conflict_do_nothing(constraint="uq_topology_edges_child_version")
+    )
+    await session.execute(
+        insert(SimulatorTopologyEdge)
+        .values(
+            [
+                {
+                    "dataset_id": dataset_row.id,
+                    "dt_id": transformer_ids[item.dt_id],
+                    "parent_pole_id": (
+                        pole_ids[item.parent_pole_id] if item.parent_pole_id is not None else None
+                    ),
+                    "child_pole_id": pole_ids[item.child_pole_id],
+                    "distance_m": item.distance_m,
+                }
+                for item in network.ground_truth_edges
+            ]
+        )
+        .on_conflict_do_nothing(constraint="uq_simulator_topology_edges_dataset_child")
+    )
+
+    scheduled_scenario = next(item for item in network.scenarios if item.scheduled)
+    scheduled_fault = scheduled_scenario.faults[0]
+    assert scheduled_fault.parent_pole_id is not None
+    assert scheduled_fault.child_pole_id is not None
+    scheduled_outage_id = f"SO-{network.dataset_id}"
+    await session.execute(
+        insert(ScheduledOutage)
+        .values(
+            outage_id=scheduled_outage_id,
+            scope=ScheduledOutageScope.SPAN,
+            scope_id=(f"{scheduled_fault.parent_pole_id}->{scheduled_fault.child_pole_id}"),
+            starts_at=datetime(2099, 1, 2, 10, 0, tzinfo=UTC),
+            ends_at=datetime(2099, 1, 2, 12, 0, tzinfo=UTC),
+            source="generated-network-manifest",
+            reason="Deterministic scheduled-fault scenario",
+        )
+        .on_conflict_do_nothing(constraint="uq_scheduled_outages_outage_id")
+    )
+
+    binding_count = await session.scalar(
+        select(func.count(DeviceBinding.id)).where(
+            DeviceBinding.device_id.in_(tuple(device_ids.values())),
+            DeviceBinding.valid_to.is_(None),
+        )
+    )
+    topology_count = await session.scalar(
+        select(func.count(TopologyEdge.id)).where(
+            TopologyEdge.dt_id.in_(tuple(transformer_ids.values()))
+        )
+    )
+    ground_truth_count = await session.scalar(
+        select(func.count(SimulatorTopologyEdge.id)).where(
+            SimulatorTopologyEdge.dataset_id == dataset_row.id
+        )
+    )
+    scheduled_count = await session.scalar(
+        select(func.count(ScheduledOutage.id)).where(
+            ScheduledOutage.outage_id == scheduled_outage_id
+        )
+    )
+    return GeneratedSeedSummary(
+        generated_dataset_id=network.dataset_id,
+        generated_substations=len(substation_ids),
+        generated_feeders=len(feeder_ids),
+        generated_transformers=len(transformer_ids),
+        generated_poles=len(pole_ids),
+        generated_devices=len(device_ids),
+        generated_bindings=binding_count or 0,
+        generated_topology_edges=topology_count or 0,
+        generated_ground_truth_edges=ground_truth_count or 0,
+        generated_scheduled_outages=scheduled_count or 0,
+        generated_logical_digest=network.logical_digest,
+    )
+
+
+async def _external_id_map(
+    session: AsyncSession,
+    external_column: InstrumentedAttribute[str],
+    internal_column: InstrumentedAttribute[int],
+    external_ids: tuple[str, ...],
+) -> dict[str, int]:
+    rows = (
+        await session.execute(
+            select(external_column, internal_column).where(external_column.in_(external_ids))
+        )
+    ).all()
+    result = {external_id: internal_id for external_id, internal_id in rows}
+    if len(result) != len(external_ids):
+        raise RuntimeError("generated seed did not resolve every external identifier")
+    return result
+
+
+def _initial_pole_status(device: GeneratedDevice | None) -> PoleStatus:
+    if device is None:
+        return PoleStatus.NO_DEVICE
+    if device.health_status == DeviceHealthStatus.STALE:
+        return PoleStatus.STALE
+    return PoleStatus.LIVE

@@ -567,3 +567,66 @@ class SimulatedFault(Base):
     injected_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     injection_telemetry_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
     repaired_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+
+class GeneratedDataset(Base):
+    __tablename__ = "generated_datasets"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", name="uq_generated_datasets_dataset_id"),
+        UniqueConstraint("logical_digest", name="uq_generated_datasets_logical_digest"),
+        CheckConstraint("seed >= 0", name="nonnegative_seed"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    generator_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    logical_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class SimulatorTopologyEdge(Base):
+    """Hidden physical topology available only to simulator and evaluation code."""
+
+    __tablename__ = "simulator_topology_edges"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["parent_pole_id", "dt_id"],
+            ["poles.id", "poles.dt_id"],
+            name="fk_simulator_topology_edges_parent_dt_poles",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["child_pole_id", "dt_id"],
+            ["poles.id", "poles.dt_id"],
+            name="fk_simulator_topology_edges_child_dt_poles",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "dataset_id",
+            "dt_id",
+            "child_pole_id",
+            name="uq_simulator_topology_edges_dataset_child",
+        ),
+        CheckConstraint(
+            "parent_pole_id IS NULL OR parent_pole_id <> child_pole_id",
+            name="different_parent_and_child",
+        ),
+        CheckConstraint("distance_m >= 0", name="nonnegative_distance"),
+        Index("ix_simulator_topology_edges_dataset_dt", "dataset_id", "dt_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("generated_datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    dt_id: Mapped[int] = mapped_column(
+        ForeignKey("distribution_transformers.id", ondelete="CASCADE"), nullable=False
+    )
+    parent_pole_id: Mapped[int | None] = mapped_column(BigInteger)
+    child_pole_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    distance_m: Mapped[float] = mapped_column(Float, nullable=False)

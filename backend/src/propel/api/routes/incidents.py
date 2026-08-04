@@ -11,6 +11,7 @@ from propel.api.schemas.incidents import (
     IncidentResponse,
     NetworkOverviewResponse,
     NetworkPoleResponse,
+    NetworkSubdivisionResponse,
     NetworkTopologyResponse,
     ResolveTicketRequest,
     TicketResponse,
@@ -25,6 +26,7 @@ from propel.infra.incidents import (
     IncidentNotFoundError,
     IncidentStoreUnavailableError,
     NetworkFeederNotFoundError,
+    NetworkSubdivisionNotFoundError,
     NetworkTransformerNotFoundError,
     PostgresIncidentService,
     TicketNotFoundError,
@@ -49,6 +51,50 @@ def unavailable_response() -> JSONResponse:
         "incident and ticket data is temporarily unavailable",
         retryable=True,
     )
+
+
+@router.get(
+    "/network/subdivision",
+    response_model=NetworkSubdivisionResponse,
+    responses=ERROR_RESPONSES,
+)
+async def get_network_subdivision(
+    request: Request,
+) -> NetworkSubdivisionResponse | JSONResponse:
+    try:
+        subdivision = await incident_service(request).get_network_subdivision()
+    except NetworkSubdivisionNotFoundError:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "SUBDIVISION_NOT_FOUND",
+            "generated subdivision network does not exist",
+            retryable=False,
+        )
+    except IncidentStoreUnavailableError:
+        return unavailable_response()
+    return NetworkSubdivisionResponse.model_validate(subdivision)
+
+
+@router.get(
+    "/network/subdivision/poles",
+    response_model=list[NetworkPoleResponse],
+    responses=ERROR_RESPONSES,
+)
+async def list_subdivision_poles(
+    request: Request,
+) -> list[NetworkPoleResponse] | JSONResponse:
+    try:
+        poles = await incident_service(request).list_subdivision_poles()
+    except NetworkSubdivisionNotFoundError:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "SUBDIVISION_NOT_FOUND",
+            "generated subdivision network does not exist",
+            retryable=False,
+        )
+    except IncidentStoreUnavailableError:
+        return unavailable_response()
+    return [NetworkPoleResponse.model_validate(pole) for pole in poles]
 
 
 @router.get(

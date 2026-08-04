@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from propel.api.routes.telemetry import error_response
 from propel.api.schemas.simulator import (
+    GeneratedNetworkManifestResponse,
     InjectFixedFaultRequest,
     SimulatedFaultResponse,
     SimulatorResetResponse,
@@ -16,6 +17,7 @@ from propel.infra.simulator import (
     InvalidSimulatorSpanError,
     MissingSimulatorDeviceError,
     PostgresSimulatorService,
+    SimulatorDatasetNotFoundError,
     SimulatorFaultNotFoundError,
     SimulatorStoreUnavailableError,
     SimulatorTelemetryUnavailableError,
@@ -40,6 +42,32 @@ def simulator_unavailable(code: str, message: str) -> JSONResponse:
         message,
         retryable=True,
     )
+
+
+@router.get(
+    "/manifest",
+    response_model=GeneratedNetworkManifestResponse,
+    responses=ERROR_RESPONSES,
+)
+async def generated_manifest(
+    request: Request,
+    dataset_id: str | None = None,
+) -> GeneratedNetworkManifestResponse | JSONResponse:
+    try:
+        manifest = await simulator_service(request).generated_manifest(dataset_id)
+    except SimulatorDatasetNotFoundError:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "SIMULATOR_DATASET_NOT_FOUND",
+            "generated simulator dataset does not exist",
+            retryable=False,
+        )
+    except SimulatorStoreUnavailableError:
+        return simulator_unavailable(
+            "SIMULATOR_STORE_UNAVAILABLE",
+            "simulator state is temporarily unavailable",
+        )
+    return GeneratedNetworkManifestResponse.model_validate(manifest)
 
 
 @router.post(

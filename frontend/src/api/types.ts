@@ -113,6 +113,35 @@ export interface NetworkOverview {
   transformers: NetworkTransformer[]
 }
 
+export interface NetworkFeeder {
+  feeder_id: string
+  name: string
+  substation_id: string
+}
+
+export interface NetworkSubdivisionTransformer extends NetworkTransformer {
+  feeder_id: string
+}
+
+export interface NetworkBounds {
+  south: number
+  west: number
+  north: number
+  east: number
+}
+
+export interface NetworkSubdivision {
+  dataset_id: string
+  generator_version: string
+  name: string
+  neighborhoods: string[]
+  bounds: NetworkBounds
+  substations: NetworkSubstation[]
+  feeders: NetworkFeeder[]
+  transformers: NetworkSubdivisionTransformer[]
+  topologies: NetworkTopology[]
+}
+
 export interface SimulatedFault {
   fault_id: string
   fault_type: 'SPAN_FAULT' | 'DT_FAULT' | 'FEEDER_FAULT'
@@ -130,10 +159,10 @@ export interface SimulatedFault {
 
 export interface InjectFaultRequest {
   fault_type: SimulatedFault['fault_type']
-  feeder_id?: 'FDR-001'
-  dt_id?: 'DT-001' | 'DT-002' | 'DT-003'
-  parent_pole_id?: 'P-001' | 'P-101' | 'P-201'
-  child_pole_id?: 'P-002' | 'P-102' | 'P-202'
+  feeder_id?: string
+  dt_id?: string
+  parent_pole_id?: string
+  child_pole_id?: string
   missing_device_pole_ids?: string[]
   omit_loss_pole_ids?: string[]
 }

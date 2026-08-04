@@ -14,13 +14,16 @@ import {
 
 import type {
   Incident,
-  NetworkOverview,
   NetworkPole,
-  NetworkTopology,
+  NetworkSubdivision,
   PoleStatus,
 } from '../api/types'
 
-const DEFAULT_CENTER: LatLngExpression = [12.88952, 77.58433]
+const DEFAULT_CENTER: LatLngExpression = [12.872, 77.584]
+const DEFAULT_SUBDIVISION_BOUNDS: LatLngBoundsExpression = [
+  [12.826, 77.552],
+  [12.917, 77.62],
+]
 const TILE_URL =
   import.meta.env.VITE_OSM_TILE_URL ?? 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 
@@ -34,13 +37,13 @@ const poleColors: Record<PoleStatus, string> = {
 
 const feederSourceIcon = divIcon({
   className: 'asset-marker asset-marker-feeder',
-  html: '<span>F</span>',
+  html: '<span>S</span>',
   iconAnchor: [14, 14],
   iconSize: [28, 28],
 })
 const selectedFeederSourceIcon = divIcon({
   className: 'asset-marker asset-marker-feeder selected',
-  html: '<span>F</span>',
+  html: '<span>S</span>',
   iconAnchor: [16, 16],
   iconSize: [32, 32],
 })
@@ -94,19 +97,33 @@ function FitNetwork({ points, focusKey }: FitNetworkProps) {
 
 interface NetworkMapProps {
   poles: NetworkPole[]
-  topologies: NetworkTopology[]
-  overview: NetworkOverview | null
+  subdivision: NetworkSubdivision | null
   selectedIncident: Incident | null
+  showPoleLabels: boolean
 }
 
-export function NetworkMap({ poles, topologies, overview, selectedIncident }: NetworkMapProps) {
+export function NetworkMap({
+  poles,
+  subdivision,
+  selectedIncident,
+  showPoleLabels,
+}: NetworkMapProps) {
+  const topologies = subdivision?.topologies ?? []
   const polesById = useMemo(
     () => new Map(poles.map((pole) => [pole.pole_id, pole])),
     [poles],
   )
   const transformersById = useMemo(
-    () => new Map(overview?.transformers.map((transformer) => [transformer.dt_id, transformer])),
-    [overview],
+    () => new Map(subdivision?.transformers.map((item) => [item.dt_id, item])),
+    [subdivision],
+  )
+  const feedersById = useMemo(
+    () => new Map(subdivision?.feeders.map((item) => [item.feeder_id, item])),
+    [subdivision],
+  )
+  const substationsById = useMemo(
+    () => new Map(subdivision?.substations.map((item) => [item.substation_id, item])),
+    [subdivision],
   )
   const selectedSpan =
     selectedIncident?.suspected_asset_type === 'SPAN' &&
@@ -123,10 +140,15 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
     const networkPoints = poles.map(
       (pole) => [pole.latitude, pole.longitude] satisfies LatLngExpression,
     )
-    if (overview) {
-      networkPoints.push([overview.substation.latitude, overview.substation.longitude])
+    if (subdivision) {
       networkPoints.push(
-        ...overview.transformers.map(
+        ...subdivision.substations.map(
+          (substation) =>
+            [substation.latitude, substation.longitude] satisfies LatLngExpression,
+        ),
+      )
+      networkPoints.push(
+        ...subdivision.transformers.map(
           (transformer) =>
             [transformer.latitude, transformer.longitude] satisfies LatLngExpression,
         ),
@@ -136,10 +158,11 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
       networkPoints.push([selectedIncident.latitude, selectedIncident.longitude])
     }
     return networkPoints
-  }, [overview, poles, selectedIncident])
-  const feederSelected =
-    selectedIncident?.suspected_asset_type === 'FEEDER' &&
-    selectedIncident.suspected_asset_id === overview?.feeder_id
+  }, [poles, selectedIncident, subdivision])
+  const selectedFeederId =
+    selectedIncident?.suspected_asset_type === 'FEEDER'
+      ? selectedIncident.suspected_asset_id
+      : null
   const selectedTransformerId =
     selectedIncident?.suspected_asset_type === 'DISTRIBUTION_TRANSFORMER'
       ? selectedIncident.suspected_asset_id
@@ -147,12 +170,24 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
   const faultFocusLabel = selectedIncident
     ? `${selectedIncident.classification.replaceAll('_', ' ')} focus`
     : null
+  const mapBounds: LatLngBoundsExpression = subdivision
+    ? [
+        [subdivision.bounds.south, subdivision.bounds.west],
+        [subdivision.bounds.north, subdivision.bounds.east],
+      ]
+    : DEFAULT_SUBDIVISION_BOUNDS
 
   return (
-    <div className="map-frame" aria-label="Seeded FDR-001 network map">
+    <div className="map-frame" aria-label="South Bengaluru subdivision network map">
       <MapContainer
         center={DEFAULT_CENTER}
-        zoom={16}
+        zoom={13}
+        minZoom={12}
+        maxZoom={18}
+        maxBounds={mapBounds}
+        maxBoundsViscosity={1}
+        preferCanvas
+        zoomSnap={0.25}
         className="network-map"
         scrollWheelZoom
       >
@@ -165,25 +200,31 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
           focusKey={selectedIncident?.incident_id ?? 'network'}
         />
 
-        {overview?.transformers.map((transformer) => (
-          <Polyline
-            key={`${overview.feeder_id}-${transformer.dt_id}`}
-            positions={[
-              [overview.substation.latitude, overview.substation.longitude],
-              [transformer.latitude, transformer.longitude],
-            ]}
-            pathOptions={{
-              color: feederSelected ? '#b6321b' : '#735a92',
-              weight: feederSelected ? 7 : 4,
-              opacity: feederSelected ? 1 : 0.8,
-              dashArray: feederSelected ? '12 7' : '8 7',
-            }}
-          >
-            <Tooltip sticky>
-              {overview.feeder_id} · source to {transformer.dt_id}
-            </Tooltip>
-          </Polyline>
-        ))}
+        {subdivision?.transformers.map((transformer) => {
+          const feeder = feedersById.get(transformer.feeder_id)
+          const substation = feeder ? substationsById.get(feeder.substation_id) : null
+          if (!feeder || !substation) return null
+          const selected = selectedFeederId === feeder.feeder_id
+          return (
+            <Polyline
+              key={`${feeder.feeder_id}-${transformer.dt_id}`}
+              positions={[
+                [substation.latitude, substation.longitude],
+                [transformer.latitude, transformer.longitude],
+              ]}
+              pathOptions={{
+                color: selected ? '#b6321b' : '#735a92',
+                weight: selected ? 5 : showPoleLabels ? 2.5 : 1.25,
+                opacity: selected ? 1 : 0.58,
+                dashArray: selected ? '12 7' : '8 7',
+              }}
+            >
+              <Tooltip sticky>
+                {feeder.name} · source to {transformer.name}
+              </Tooltip>
+            </Polyline>
+          )
+        })}
 
         {topologies.flatMap((topology) =>
           topology.spans.map((span) => ({ span, topology })),
@@ -205,8 +246,8 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
               ]}
               pathOptions={{
                 color: selected ? '#e75f3b' : inferred ? '#3979a8' : '#446a5b',
-                weight: selected ? 7 : 4,
-                opacity: selected ? 1 : inferred ? 0.88 : 0.72,
+                weight: selected ? 7 : showPoleLabels ? 2.5 : 1,
+                opacity: selected ? 1 : inferred ? 0.68 : 0.52,
                 dashArray: inferred ? (selected ? '8 5' : '6 6') : undefined,
               }}
             >
@@ -262,27 +303,38 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
           </CircleMarker>
         )}
 
-        {overview && (
-          <Marker
-            position={[overview.substation.latitude, overview.substation.longitude]}
-            icon={feederSelected ? selectedFeederSourceIcon : feederSourceIcon}
-            zIndexOffset={500}
-          >
-            <Tooltip className="asset-tooltip" permanent direction="left" offset={[-10, 0]}>
-              {overview.feeder_id} source
-            </Tooltip>
-            <Popup>
-              <strong>{overview.feeder_id}</strong> · {overview.name}
-              <br />
-              Source: {overview.substation.substation_id} · {overview.substation.name}
-              <br />
-              PIN: {overview.substation.pin_code}
-            </Popup>
-          </Marker>
-        )}
+        {subdivision?.substations.map((substation) => {
+          const substationFeeders = subdivision.feeders.filter(
+            (feeder) => feeder.substation_id === substation.substation_id,
+          )
+          const selected = substationFeeders.some(
+            (feeder) => feeder.feeder_id === selectedFeederId,
+          )
+          return (
+            <Marker
+              key={substation.substation_id}
+              position={[substation.latitude, substation.longitude]}
+              icon={selected ? selectedFeederSourceIcon : feederSourceIcon}
+              zIndexOffset={500}
+            >
+              <Tooltip className="asset-tooltip" permanent direction="left" offset={[-10, 0]}>
+                {substation.name}
+              </Tooltip>
+              <Popup>
+                <strong>{substation.name}</strong>
+                <br />
+                {substation.substation_id} · PIN {substation.pin_code}
+                <br />
+                Feeders: {substationFeeders.map((feeder) => feeder.name).join(', ')}
+              </Popup>
+            </Marker>
+          )
+        })}
 
-        {overview?.transformers.map((transformer) => {
-          const selected = transformer.dt_id === selectedTransformerId || feederSelected
+        {subdivision?.transformers.map((transformer) => {
+          const selected =
+            transformer.dt_id === selectedTransformerId ||
+            transformer.feeder_id === selectedFeederId
           return (
             <Marker
               key={transformer.dt_id}
@@ -290,8 +342,13 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
               icon={selected ? selectedTransformerIcon : transformerIcon}
               zIndexOffset={400}
             >
-              <Tooltip className="asset-tooltip" permanent direction="top" offset={[0, -11]}>
-                {transformer.dt_id}
+              <Tooltip
+                className="asset-tooltip"
+                permanent={showPoleLabels || selected}
+                direction="top"
+                offset={[0, -11]}
+              >
+                {transformer.name}
               </Tooltip>
               <Popup>
                 <strong>{transformer.dt_id}</strong> · {transformer.name}
@@ -304,32 +361,33 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
           )
         })}
 
-        {poles.map((pole) => (
-          <CircleMarker
-            key={pole.pole_id}
-            center={[pole.latitude, pole.longitude]}
-            radius={selectedIncident?.affected_pole_ids.includes(pole.pole_id) ? 10 : 8}
-            pathOptions={{
-              color: selectedIncident?.affected_pole_ids.includes(pole.pole_id)
-                ? '#b6321b'
-                : '#f4f1e8',
-              weight: selectedIncident?.affected_pole_ids.includes(pole.pole_id) ? 4 : 2,
-              fillColor: poleColors[pole.state],
-              fillOpacity: 1,
-            }}
-          >
-            <Tooltip permanent direction="top" offset={[0, -8]}>
-              {pole.pole_id}
-            </Tooltip>
-            <Popup>
-              <strong>{pole.pole_id}</strong>
-              <br />
-              State: {pole.state}
-              <br />
-              Device: {pole.device_id ?? 'No device'}
-            </Popup>
-          </CircleMarker>
-        ))}
+        {poles.map((pole) => {
+          const affected = selectedIncident?.affected_pole_ids.includes(pole.pole_id) ?? false
+          return (
+            <CircleMarker
+              key={pole.pole_id}
+              center={[pole.latitude, pole.longitude]}
+              radius={affected ? 9 : showPoleLabels ? 5 : 2.5}
+              pathOptions={{
+                color: affected ? '#b6321b' : poleColors[pole.state],
+                weight: affected ? 4 : showPoleLabels ? 1 : 0,
+                fillColor: poleColors[pole.state],
+                fillOpacity: showPoleLabels ? 0.95 : 0.78,
+              }}
+            >
+              <Tooltip permanent={showPoleLabels || affected} direction="top" offset={[0, -8]}>
+                {pole.pole_id}
+              </Tooltip>
+              <Popup>
+                <strong>{pole.pole_id}</strong>
+                <br />
+                State: {pole.state}
+                <br />
+                Device: {pole.device_id ?? 'No device'}
+              </Popup>
+            </CircleMarker>
+          )
+        })}
       </MapContainer>
 
       <ul className="map-legend" aria-label="Network asset and pole state legend">

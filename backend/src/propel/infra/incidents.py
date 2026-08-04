@@ -1,10 +1,12 @@
 import json
 import logging
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -22,9 +24,13 @@ from propel.domain.enums import (
 from propel.incidents.models import (
     IncidentTicketReference,
     IncidentView,
+    NetworkBoundsView,
+    NetworkFeederView,
     NetworkOverviewView,
     NetworkPoleView,
     NetworkSpanView,
+    NetworkSubdivisionTransformerView,
+    NetworkSubdivisionView,
     NetworkSubstationView,
     NetworkTopologyView,
     NetworkTransformerView,
@@ -45,6 +51,7 @@ from propel.infra.database.models import (
     DeviceHealth,
     DistributionTransformer,
     Feeder,
+    GeneratedDataset,
     Incident,
     IncidentPole,
     Pole,
@@ -57,6 +64,9 @@ from propel.infra.database.models import (
 )
 
 logger = logging.getLogger(__name__)
+BACKBONE_SUBSTATION_ID = "SUB-001"
+BACKBONE_FEEDER_ID = "FDR-001"
+BACKBONE_TRANSFORMER_IDS = ("DT-001", "DT-002", "DT-003")
 
 
 class IncidentStoreUnavailableError(Exception):
@@ -76,6 +86,10 @@ class NetworkTransformerNotFoundError(Exception):
 
 
 class NetworkFeederNotFoundError(Exception):
+    pass
+
+
+class NetworkSubdivisionNotFoundError(Exception):
     pass
 
 
@@ -679,6 +693,265 @@ class PostgresIncidentService:
             ),
         )
 
+    async def get_network_subdivision(self) -> NetworkSubdivisionView:
+        try:
+            async with self._session_factory() as session:
+                dataset_id, generator_version, prefix = await self._generated_dataset(session)
+                substation_rows = (
+                    await session.execute(
+                        select(
+                            Substation.id,
+                            Substation.substation_id,
+                            Substation.name,
+                            Substation.latitude,
+                            Substation.longitude,
+                            Substation.pin_code,
+                        )
+                        .where(
+                            or_(
+                                Substation.substation_id.startswith(f"{prefix}-"),
+                                Substation.substation_id == BACKBONE_SUBSTATION_ID,
+                            )
+                        )
+                        .order_by(Substation.substation_id)
+                    )
+                ).all()
+                feeder_rows = (
+                    await session.execute(
+                        select(
+                            Feeder.id,
+                            Feeder.feeder_id,
+                            Feeder.name,
+                            Substation.substation_id,
+                        )
+                        .join(Substation, Substation.id == Feeder.substation_id)
+                        .where(
+                            or_(
+                                Feeder.feeder_id.startswith(f"{prefix}-"),
+                                Feeder.feeder_id == BACKBONE_FEEDER_ID,
+                            )
+                        )
+                        .order_by(Feeder.feeder_id)
+                    )
+                ).all()
+                transformer_rows = (
+                    await session.execute(
+                        select(
+                            DistributionTransformer.id,
+                            DistributionTransformer.dt_id,
+                            Feeder.feeder_id,
+                            DistributionTransformer.name,
+                            DistributionTransformer.latitude,
+                            DistributionTransformer.longitude,
+                            DistributionTransformer.pin_code,
+                        )
+                        .join(Feeder, Feeder.id == DistributionTransformer.feeder_id)
+                        .where(
+                            or_(
+                                DistributionTransformer.dt_id.startswith(f"{prefix}-"),
+                                DistributionTransformer.dt_id.in_(BACKBONE_TRANSFORMER_IDS),
+                            )
+                        )
+                        .order_by(DistributionTransformer.dt_id)
+                    )
+                ).all()
+                transformer_ids = tuple(row.id for row in transformer_rows)
+                topologies = await self._load_topology_views(
+                    session,
+                    tuple((row.id, row.dt_id) for row in transformer_rows),
+                )
+                bounds_row = (
+                    await session.execute(
+                        select(
+                            func.min(Pole.latitude).label("south"),
+                            func.min(Pole.longitude).label("west"),
+                            func.max(Pole.latitude).label("north"),
+                            func.max(Pole.longitude).label("east"),
+                        ).where(Pole.dt_id.in_(transformer_ids))
+                    )
+                ).one()
+        except SQLAlchemyError as error:
+            raise IncidentStoreUnavailableError from error
+        if not substation_rows or not feeder_rows or not transformer_rows:
+            raise NetworkSubdivisionNotFoundError
+        if any(
+            value is None
+            for value in (bounds_row.south, bounds_row.west, bounds_row.north, bounds_row.east)
+        ):
+            raise NetworkSubdivisionNotFoundError
+        bounds_padding = 0.008
+        return NetworkSubdivisionView(
+            dataset_id=dataset_id,
+            generator_version=generator_version,
+            name="South Bengaluru subdivision",
+            neighborhoods=("Anjanapura", "Konanakunte", "Kothnur", "JP Nagar"),
+            bounds=NetworkBoundsView(
+                south=max(-90.0, bounds_row.south - bounds_padding),
+                west=max(-180.0, bounds_row.west - bounds_padding),
+                north=min(90.0, bounds_row.north + bounds_padding),
+                east=min(180.0, bounds_row.east + bounds_padding),
+            ),
+            substations=tuple(
+                NetworkSubstationView(
+                    substation_id=row.substation_id,
+                    name=row.name,
+                    latitude=row.latitude,
+                    longitude=row.longitude,
+                    pin_code=row.pin_code,
+                )
+                for row in substation_rows
+            ),
+            feeders=tuple(
+                NetworkFeederView(
+                    feeder_id=row.feeder_id,
+                    name=row.name,
+                    substation_id=row.substation_id,
+                )
+                for row in feeder_rows
+            ),
+            transformers=tuple(
+                NetworkSubdivisionTransformerView(
+                    dt_id=row.dt_id,
+                    feeder_id=row.feeder_id,
+                    name=row.name,
+                    latitude=row.latitude,
+                    longitude=row.longitude,
+                    pin_code=row.pin_code,
+                )
+                for row in transformer_rows
+            ),
+            topologies=topologies,
+        )
+
+    async def list_subdivision_poles(self) -> list[NetworkPoleView]:
+        try:
+            async with self._session_factory() as session:
+                _, _, prefix = await self._generated_dataset(session)
+                rows = (
+                    await session.execute(
+                        select(
+                            Pole.pole_id,
+                            DistributionTransformer.dt_id,
+                            Pole.latitude,
+                            Pole.longitude,
+                            Pole.pin_code,
+                            PoleState.state,
+                            PoleState.received_at,
+                            Device.device_id,
+                        )
+                        .join(
+                            DistributionTransformer,
+                            DistributionTransformer.id == Pole.dt_id,
+                        )
+                        .outerjoin(PoleState, PoleState.pole_id == Pole.id)
+                        .outerjoin(
+                            DeviceBinding,
+                            (DeviceBinding.pole_id == Pole.id) & DeviceBinding.valid_to.is_(None),
+                        )
+                        .outerjoin(Device, Device.id == DeviceBinding.device_id)
+                        .where(
+                            or_(
+                                DistributionTransformer.dt_id.startswith(f"{prefix}-"),
+                                DistributionTransformer.dt_id.in_(BACKBONE_TRANSFORMER_IDS),
+                            )
+                        )
+                        .order_by(Pole.pole_id)
+                    )
+                ).all()
+        except SQLAlchemyError as error:
+            raise IncidentStoreUnavailableError from error
+        if not rows:
+            raise NetworkSubdivisionNotFoundError
+        return [
+            NetworkPoleView(
+                pole_id=row.pole_id,
+                dt_id=row.dt_id,
+                latitude=row.latitude,
+                longitude=row.longitude,
+                pin_code=row.pin_code,
+                state=(
+                    PoleStatus.NO_DEVICE
+                    if row.device_id is None
+                    else row.state or PoleStatus.UNKNOWN
+                ),
+                state_received_at=row.received_at,
+                device_id=row.device_id,
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    async def _generated_dataset(session: AsyncSession) -> tuple[str, str, str]:
+        row = (
+            await session.execute(
+                select(
+                    GeneratedDataset.dataset_id,
+                    GeneratedDataset.generator_version,
+                ).order_by(GeneratedDataset.created_at.desc(), GeneratedDataset.id.desc())
+            )
+        ).first()
+        if row is None:
+            raise NetworkSubdivisionNotFoundError
+        suffix = f"-{row.generator_version}"
+        if not row.dataset_id.endswith(suffix):
+            raise NetworkSubdivisionNotFoundError
+        return row.dataset_id, row.generator_version, row.dataset_id.removesuffix(suffix)
+
+    @staticmethod
+    async def _load_topology_views(
+        session: AsyncSession,
+        transformers: tuple[tuple[int, str], ...],
+    ) -> tuple[NetworkTopologyView, ...]:
+        if not transformers:
+            return ()
+        transformer_ids = tuple(item[0] for item in transformers)
+        latest_topology = (
+            select(
+                TopologyEdge.dt_id,
+                func.max(TopologyEdge.topology_version).label("topology_version"),
+            )
+            .where(TopologyEdge.dt_id.in_(transformer_ids))
+            .group_by(TopologyEdge.dt_id)
+            .subquery()
+        )
+        parent = aliased(Pole)
+        child = aliased(Pole)
+        rows = (
+            await session.execute(
+                select(
+                    TopologyEdge.dt_id,
+                    TopologyEdge.topology_version,
+                    parent.pole_id.label("parent_pole_id"),
+                    child.pole_id.label("child_pole_id"),
+                    TopologyEdge.source,
+                    TopologyEdge.distance_m,
+                    TopologyEdge.edge_confidence,
+                    TopologyEdge.inference_version,
+                )
+                .select_from(TopologyEdge)
+                .join(
+                    latest_topology,
+                    (latest_topology.c.dt_id == TopologyEdge.dt_id)
+                    & (latest_topology.c.topology_version == TopologyEdge.topology_version),
+                )
+                .outerjoin(parent, parent.id == TopologyEdge.parent_pole_id)
+                .join(child, child.id == TopologyEdge.child_pole_id)
+                .where(TopologyEdge.dt_id.in_(transformer_ids))
+                .order_by(TopologyEdge.dt_id, parent.pole_id.nullsfirst(), child.pole_id)
+            )
+        ).all()
+        rows_by_dt: defaultdict[int, list[Any]] = defaultdict(list)
+        for row in rows:
+            rows_by_dt[row.dt_id].append(row)
+        return tuple(
+            _network_topology_view(
+                external_id,
+                rows_by_dt[internal_id][0].topology_version if rows_by_dt[internal_id] else 0,
+                rows_by_dt[internal_id],
+            )
+            for internal_id, external_id in transformers
+        )
+
     async def list_network_poles(self, dt_id: str) -> list[NetworkPoleView]:
         try:
             async with self._session_factory() as session:
@@ -826,49 +1099,57 @@ class PostgresIncidentService:
                 ).all()
         except SQLAlchemyError as error:
             raise IncidentStoreUnavailableError from error
-        source = rows[0].source if rows else None
-        confidences = tuple(row.edge_confidence for row in rows)
-        if source == TopologySource.SURVEYED:
-            quality_score = 1.0
-            quality_tier = "SURVEYED"
-            quality_reasons: tuple[str, ...] = ()
-        elif confidences:
-            quality_score = round(
-                0.6 * (sum(confidences) / len(confidences)) + 0.4 * min(confidences),
-                4,
-            )
-            quality_tier = "STRONGLY_INFERRED" if quality_score >= 0.7 else "WEAKLY_INFERRED"
-            quality_reasons = (
-                "surveyed connectivity is unavailable; topology is inferred from geography",
-            )
-            if quality_tier == "WEAKLY_INFERRED":
-                quality_reasons += ("one or more inferred edges have weak geographic separation",)
-        else:
-            quality_score = 0.0
-            quality_tier = "UNUSABLE"
-            quality_reasons = ("no usable topology edges are recorded",)
-        inference_versions = {
-            row.inference_version for row in rows if row.inference_version is not None
-        }
-        return NetworkTopologyView(
-            dt_id=dt_id,
-            topology_version=topology_version,
-            source=source,
-            quality_score=quality_score,
-            quality_tier=quality_tier,
-            quality_reasons=quality_reasons,
-            inference_version=(
-                next(iter(inference_versions)) if len(inference_versions) == 1 else None
-            ),
-            spans=tuple(
-                NetworkSpanView(
-                    parent_pole_id=row.parent_pole_id,
-                    child_pole_id=row.child_pole_id,
-                    source=row.source,
-                    edge_confidence=row.edge_confidence,
-                    distance_m=row.distance_m,
-                    inference_version=row.inference_version,
-                )
-                for row in rows
-            ),
+        return _network_topology_view(dt_id, topology_version, rows)
+
+
+def _network_topology_view(
+    dt_id: str,
+    topology_version: int,
+    rows: Sequence[Any],
+) -> NetworkTopologyView:
+    source = rows[0].source if rows else None
+    confidences = tuple(row.edge_confidence for row in rows)
+    if source == TopologySource.SURVEYED:
+        quality_score = 1.0
+        quality_tier = "SURVEYED"
+        quality_reasons: tuple[str, ...] = ()
+    elif confidences:
+        quality_score = round(
+            0.6 * (sum(confidences) / len(confidences)) + 0.4 * min(confidences),
+            4,
         )
+        quality_tier = "STRONGLY_INFERRED" if quality_score >= 0.7 else "WEAKLY_INFERRED"
+        quality_reasons = (
+            "surveyed connectivity is unavailable; topology is inferred from geography",
+        )
+        if quality_tier == "WEAKLY_INFERRED":
+            quality_reasons += ("one or more inferred edges have weak geographic separation",)
+    else:
+        quality_score = 0.0
+        quality_tier = "UNUSABLE"
+        quality_reasons = ("no usable topology edges are recorded",)
+    inference_versions = {
+        row.inference_version for row in rows if row.inference_version is not None
+    }
+    return NetworkTopologyView(
+        dt_id=dt_id,
+        topology_version=topology_version,
+        source=source,
+        quality_score=quality_score,
+        quality_tier=quality_tier,
+        quality_reasons=quality_reasons,
+        inference_version=(
+            next(iter(inference_versions)) if len(inference_versions) == 1 else None
+        ),
+        spans=tuple(
+            NetworkSpanView(
+                parent_pole_id=row.parent_pole_id,
+                child_pole_id=row.child_pole_id,
+                source=row.source,
+                edge_confidence=row.edge_confidence,
+                distance_m=row.distance_m,
+                inference_version=row.inference_version,
+            )
+            for row in rows
+        ),
+    )

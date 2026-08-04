@@ -6,24 +6,27 @@ import { App } from './App'
 import type {
   HealthResponse,
   Incident,
-  NetworkOverview,
   NetworkPole,
+  NetworkSubdivision,
   NetworkTopology,
   Ticket,
 } from './api/types'
 
 vi.mock('./components/NetworkMap', () => ({
   NetworkMap: ({
-    overview,
+    poles,
+    subdivision,
     selectedIncident,
   }: {
-    overview: NetworkOverview | null
+    poles: NetworkPole[]
+    subdivision: NetworkSubdivision | null
     selectedIncident: Incident | null
   }) => (
     <div data-testid="network-map">
       Map focus: {selectedIncident?.suspected_asset_id ?? 'network'}
       <span>
-        Assets: {overview?.feeder_id ?? 'none'} · {overview?.transformers.length ?? 0} DTs
+        Assets: {subdivision?.feeders.length ?? 0} feeders ·{' '}
+        {subdivision?.transformers.length ?? 0} DTs · {poles.length} poles
       </span>
     </div>
   ),
@@ -204,19 +207,26 @@ const topology: NetworkTopology = {
   ],
 }
 
-const networkOverview: NetworkOverview = {
-  feeder_id: 'FDR-001',
-  name: 'Demo Feeder',
-  substation: {
-    substation_id: 'SUB-001',
-    name: 'Demo Substation',
-    latitude: 12.889,
-    longitude: 77.5839,
-    pin_code: '560078',
-  },
+const networkSubdivision: NetworkSubdivision = {
+  dataset_id: 'GN-SEED-v1',
+  generator_version: 'v1',
+  name: 'South Bengaluru subdivision',
+  neighborhoods: ['Anjanapura', 'Konanakunte', 'Kothnur', 'JP Nagar'],
+  bounds: { south: 12.826, west: 77.552, north: 12.917, east: 77.62 },
+  substations: [
+    {
+      substation_id: 'SUB-001',
+      name: 'Demo Substation',
+      latitude: 12.889,
+      longitude: 77.5839,
+      pin_code: '560078',
+    },
+  ],
+  feeders: [{ feeder_id: 'FDR-001', name: 'Demo Feeder', substation_id: 'SUB-001' }],
   transformers: [
     {
       dt_id: 'DT-001',
+      feeder_id: 'FDR-001',
       name: 'Demo DT 1',
       latitude: 12.8891,
       longitude: 77.584,
@@ -224,6 +234,7 @@ const networkOverview: NetworkOverview = {
     },
     {
       dt_id: 'DT-002',
+      feeder_id: 'FDR-001',
       name: 'Demo DT 2',
       latitude: 12.89005,
       longitude: 77.585,
@@ -231,10 +242,24 @@ const networkOverview: NetworkOverview = {
     },
     {
       dt_id: 'DT-003',
+      feeder_id: 'FDR-001',
       name: 'Demo DT 3',
       latitude: 12.891,
       longitude: 77.586,
       pin_code: '560078',
+    },
+  ],
+  topologies: [
+    topology,
+    { ...topology, dt_id: 'DT-002', spans: [] },
+    {
+      ...topology,
+      dt_id: 'DT-003',
+      source: 'INFERRED',
+      quality_score: 0.84,
+      quality_tier: 'STRONGLY_INFERRED',
+      inference_version: 'geo-mst-v1',
+      spans: [],
     },
   ],
 }
@@ -291,23 +316,8 @@ function installFetchRouter(options?: {
         ],
       })
     }
-    if (url.startsWith('/api/network/poles')) return jsonResponse(poles)
-    if (url === '/api/network/overview/FDR-001') return jsonResponse(networkOverview)
-    if (url === '/api/network/topology/DT-001') return jsonResponse(topology)
-    if (url === '/api/network/topology/DT-002') {
-      return jsonResponse({ ...topology, dt_id: 'DT-002', spans: [] })
-    }
-    if (url === '/api/network/topology/DT-003') {
-      return jsonResponse({
-        ...topology,
-        dt_id: 'DT-003',
-        source: 'INFERRED',
-        quality_score: 0.84,
-        quality_tier: 'STRONGLY_INFERRED',
-        inference_version: 'geo-mst-v1',
-        spans: [],
-      })
-    }
+    if (url === '/api/network/subdivision/poles') return jsonResponse(poles)
+    if (url === '/api/network/subdivision') return jsonResponse(networkSubdivision)
     if (url === '/api/simulator/faults/fault-1/repair') {
       return jsonResponse({
         fault_id: 'fault-1',
@@ -393,7 +403,10 @@ describe('App', () => {
       screen.getByText('surveyed topology supports exact-span precision'),
     ).toBeInTheDocument()
     expect(screen.getByTestId('network-map')).toHaveTextContent('P-001->P-002')
-    expect(screen.getByTestId('network-map')).toHaveTextContent('FDR-001 · 3 DTs')
+    expect(screen.getByTestId('network-map')).toHaveTextContent('1 feeders · 3 DTs · 1 poles')
+    expect(screen.getByRole('heading', { name: 'South Bengaluru subdivision' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Filter map by feeder')).toHaveValue('ALL')
+    expect(screen.getByLabelText('Filter map by transformer')).toHaveValue('ALL')
     expect(await screen.findByRole('button', { name: 'Acknowledge incident' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: 'Assign crew' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Claim physical repair' })).not.toBeInTheDocument()
