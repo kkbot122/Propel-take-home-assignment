@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import ceil
@@ -6,6 +7,21 @@ from propel.domain.enums import PoleStatus
 
 REPAIR_NOT_VERIFIED = "REPAIR_NOT_VERIFIED"
 RESTORATION_VERIFIED = "RESTORATION_VERIFIED"
+
+
+def required_span_restoration_pole_id(
+    suspected_asset_id: str,
+    incident_evidence: Mapping[str, object],
+) -> str | None:
+    candidate = incident_evidence.get("candidate")
+    if isinstance(candidate, dict):
+        corridor = candidate.get("corridor")
+        if isinstance(corridor, dict):
+            downstream = corridor.get("downstream_pole_id")
+            if isinstance(downstream, str) and downstream:
+                return downstream
+    _, separator, child_pole_id = suspected_asset_id.partition("->")
+    return child_pole_id if separator and child_pole_id else None
 
 
 @dataclass(frozen=True, slots=True)

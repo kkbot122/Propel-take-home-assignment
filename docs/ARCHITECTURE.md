@@ -514,7 +514,7 @@ Accepted state changes reset a DT's due time in a Redis sorted set. The analyzer
 For a transformer with surveyed parent relationships:
 
 1. Read the current state of poles in the DT tree.
-2. Find dark poles whose parent is live.
+2. Find dark poles whose parent has recent, healthy, power-loss-capable live evidence.
 3. Treat each live-parent/dark-child edge as a candidate fault boundary.
 4. Collect the observable dark descendants below each candidate.
 5. Remove candidates contradicted by descendants with fresh live evidence received after candidate onset and which cannot be explained by ordering or identity anomalies.
@@ -534,6 +534,19 @@ Probable span fault: P2–P3
 Affected poles: P3 and P4
 Localization precision: exact surveyed span
 ```
+
+When a surveyed path contains `NO_DEVICE`, `STALE`, `UNKNOWN`, unhealthy, or
+power-loss-incapable evidence, that pole is neither live nor dark corroboration.
+The localizer walks to the nearest credible live pole above the gap and the
+first credible dark pole below it. A unique bounded path becomes a `CORRIDOR`
+whose evidence stores the ordered bounding poles and skipped pole IDs. The
+incident asset ID uses `P-001..P-003`, never the surveyed-edge form
+`P-001->P-003`. If there is no credible upper bound, the result is an
+`UNCONFIRMED_OUTAGE` at `DT_LEVEL` rather than an invented span.
+
+The console draws a corridor as a dashed amber path. An unbounded DT-level
+result uses a purple transformer-area focus. Both views explain why exact
+precision was withheld.
 
 ### 9.3 Transformer fault
 
@@ -659,7 +672,7 @@ Suggested presentation:
 
 The API should return both a normalized score and a list of reasons. The UI should emphasize the level and plain-language reason rather than only a percentage.
 
-Confidence and precision remain independent: the system can be highly confident that a DT failed while only reporting `DT_LEVEL` precision. Initial score bands are `HIGH >= 80`, `MEDIUM 50–79`, and `LOW < 50`. An inferred span is capped below `HIGH`; a corridor may still have strong evidence that an outage exists, but cannot be relabelled as an exact span.
+Confidence and precision remain independent: the system can be highly confident that a DT failed while only reporting `DT_LEVEL` precision. Initial score bands are `HIGH >= 80`, `MEDIUM 50–79`, and `LOW < 50`. A missing-evidence corridor is capped at 79 and an unbounded degraded DT result at 49. An inferred span is capped below `HIGH`; a corridor may still have strong evidence that an outage exists, but cannot be relabelled as an exact span.
 
 ### 12.1 Initial deterministic rule defaults
 
@@ -725,10 +738,10 @@ The exact schema will be maintained in generated OpenAPI documentation. Planned 
 | `GET`  | `/api/network/poles`                | Read poles for map display                 |
 | `GET`  | `/api/network/topology/{dt_id}`     | Read surveyed or inferred DT topology      |
 | `GET`  | `/api/scheduled-outages`            | Read current scheduled outages             |
-| `POST` | `/api/simulator/faults`             | Inject a fixed independent surveyed fault  |
+| `POST` | `/api/simulator/faults`             | Inject a fixed fault with optional telemetry noise |
 | `POST` | `/api/simulator/faults/{id}/repair` | Emit restoration telemetry for a fault     |
 | `POST` | `/api/simulator/reset`              | Repair every active simulated fault        |
-| `POST` | `/api/simulator/noise`              | Inject independent noise                   |
+| `POST` | `/api/simulator/noise`              | Reserved for later independent noise       |
 | `GET`  | `/health`                           | Liveness and dependency health             |
 
 Simulator routes are a development/evaluation control surface and can be

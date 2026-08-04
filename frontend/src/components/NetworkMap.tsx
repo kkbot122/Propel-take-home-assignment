@@ -57,6 +57,21 @@ const selectedTransformerIcon = divIcon({
   iconSize: [32, 32],
 })
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function corridorPoleIds(incident: Incident | null): string[] {
+  const candidate = incident?.evidence.candidate
+  if (!isRecord(candidate)) return []
+  const corridor = candidate.corridor
+  if (!isRecord(corridor)) return []
+  const orderedPoleIds = corridor.ordered_pole_ids
+  return Array.isArray(orderedPoleIds)
+    ? orderedPoleIds.filter((poleId): poleId is string => typeof poleId === 'string')
+    : []
+}
+
 interface FitNetworkProps {
   points: LatLngExpression[]
   focusKey: string
@@ -94,9 +109,15 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
     [overview],
   )
   const selectedSpan =
-    selectedIncident?.suspected_asset_type === 'SPAN'
+    selectedIncident?.suspected_asset_type === 'SPAN' &&
+    selectedIncident.precision === 'EXACT_SPAN'
       ? selectedIncident.suspected_asset_id.split('->')
       : []
+  const selectedCorridorPoleIds = corridorPoleIds(selectedIncident)
+  const selectedCorridorPositions = selectedCorridorPoleIds
+    .map((poleId) => polesById.get(poleId))
+    .filter((pole): pole is NetworkPole => pole !== undefined)
+    .map((pole) => [pole.latitude, pole.longitude] satisfies LatLngExpression)
   const focusPoints = useMemo<LatLngExpression[]>(() => {
     const networkPoints = poles.map(
       (pole) => [pole.latitude, pole.longitude] satisfies LatLngExpression,
@@ -193,6 +214,22 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
           )
         })}
 
+        {selectedCorridorPositions.length >= 2 && (
+          <Polyline
+            positions={selectedCorridorPositions}
+            pathOptions={{
+              color: '#d98220',
+              weight: 9,
+              opacity: 0.92,
+              dashArray: '7 8',
+            }}
+          >
+            <Tooltip>
+              Uncertain corridor · {selectedCorridorPoleIds.join(' → ')}
+            </Tooltip>
+          </Polyline>
+        )}
+
         {selectedIncident && (
           <CircleMarker
             center={[selectedIncident.latitude, selectedIncident.longitude]}
@@ -204,9 +241,9 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
                   : 22
             }
             pathOptions={{
-              color: '#a92f1e',
+              color: selectedIncident.precision === 'DT_LEVEL' ? '#71519b' : '#a92f1e',
               weight: 5,
-              fillColor: '#f06b49',
+              fillColor: selectedIncident.precision === 'DT_LEVEL' ? '#9b79c6' : '#f06b49',
               fillOpacity: 0.12,
               dashArray: '9 5',
             }}
@@ -214,7 +251,9 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
             <Tooltip className="fault-tooltip" direction="bottom" offset={[0, 24]} permanent>
               {selectedIncident.status === 'SUPPRESSED'
                 ? 'Suppressed diagnostic'
-                : faultFocusLabel}
+                : selectedIncident.precision === 'DT_LEVEL'
+                  ? 'Location degraded to DT level'
+                  : faultFocusLabel}
             </Tooltip>
           </CircleMarker>
         )}

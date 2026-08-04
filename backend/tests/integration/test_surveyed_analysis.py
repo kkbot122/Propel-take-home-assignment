@@ -870,6 +870,122 @@ async def test_scope_faults_classify_through_public_simulator_telemetry(
 
 
 @pytest.mark.asyncio
+async def test_missing_device_noise_persists_and_serves_corridor_precision(
+    analysis_harness: AnalysisHarness,
+) -> None:
+    base = datetime.now(UTC)
+    clock = MutableClock(base)
+    ingestion = TelemetryIngestionService(
+        PostgresPoleBindingResolver(analysis_harness.engine),
+        RedisTelemetryPublisher(analysis_harness.redis, analysis_harness.stream),
+        clock=clock,
+    )
+    gateway = AsgiSimulatorTelemetryGateway()
+    simulator = PostgresSimulatorService(analysis_harness.engine, gateway, clock=clock)
+    incidents = PostgresIncidentService(analysis_harness.engine, clock=clock)
+    app = create_app(
+        settings=get_settings(),
+        telemetry_service=ingestion,
+        incident_service=incidents,
+        simulator_service=simulator,
+    )
+    gateway.app = app
+    consumer = analysis_harness.consumer()
+    await consumer.ensure_group()
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/simulator/faults",
+                json={
+                    "fault_type": "SPAN_FAULT",
+                    "dt_id": "DT-001",
+                    "parent_pole_id": "P-001",
+                    "child_pole_id": "P-002",
+                    "missing_device_pole_ids": ["P-002"],
+                },
+            )
+            assert response.status_code == 201, response.json()
+            injected = response.json()
+            fault_id = UUID(injected["fault_id"])
+            analysis_harness.simulated_fault_ids.add(fault_id)
+            analysis_harness.event_ids.update(UUID(item) for item in injected["emitted_event_ids"])
+            assert len(injected["emitted_event_ids"]) == 3
+            assert await consumer.consume_new_once() == 3
+
+            clock.value = base + timedelta(seconds=11)
+            scheduler = RedisAnalysisScheduler(
+                analysis_harness.redis,
+                PostgresDtSnapshotRepository(analysis_harness.engine),
+                due_set_name=analysis_harness.due_set,
+                live_freshness_seconds=1_920,
+                retry_delay_seconds=5,
+                candidate_sink=incidents,
+                clock=clock,
+            )
+            candidates = await scheduler.run_due_once()
+
+            assert len(candidates) == 1
+            candidate = candidates[0]
+            assert candidate.precision == LocalizationPrecision.CORRIDOR
+            assert candidate.suspected_asset_id == "P-001..P-003"
+            assert candidate.affected_pole_ids == ("P-003", "P-004")
+            assert candidate.evidence.corridor is not None
+
+            persisted = next(
+                item
+                for item in await incidents.list_incidents()
+                if item.fingerprint == "corridor:DT-001:P-001..P-003"
+            )
+            analysis_harness.incident_ids.add(persisted.incident_id)
+            detail_response = await client.get(f"/api/incidents/{persisted.incident_id}")
+
+            assert detail_response.status_code == 200
+            detail = detail_response.json()
+            assert detail["precision"] == "CORRIDOR"
+            assert detail["suspected_asset_id"] == "P-001..P-003"
+            assert detail["suspected_asset_id"] != "P-001->P-003"
+            assert detail["evidence"]["candidate"]["corridor"] == {
+                "upstream_pole_id": "P-001",
+                "downstream_pole_id": "P-003",
+                "ordered_pole_ids": ["P-001", "P-002", "P-003"],
+                "skipped_pole_ids": ["P-002"],
+            }
+
+            assert persisted.ticket_id is not None
+            await client.post(
+                f"/api/tickets/{persisted.ticket_id}/acknowledge",
+                json={"actor": "operator-1"},
+            )
+            await client.post(
+                f"/api/tickets/{persisted.ticket_id}/assign",
+                json={"actor": "operator-1", "assigned_crew": "Crew-4"},
+            )
+            clock.value = base + timedelta(seconds=12)
+            await client.post(
+                f"/api/tickets/{persisted.ticket_id}/resolve",
+                json={"actor": "operator-1", "reason": "corridor repair claimed"},
+            )
+
+            clock.value = base + timedelta(seconds=13)
+            repair_response = await client.post(f"/api/simulator/faults/{fault_id}/repair")
+            assert repair_response.status_code == 200
+            repair_events = repair_response.json()["emitted_event_ids"]
+            analysis_harness.event_ids.update(UUID(item) for item in repair_events)
+            assert await consumer.consume_new_once() == 6
+
+            clock.value = base + timedelta(seconds=24)
+            assert (
+                await incidents.verify_restorations_once(
+                    threshold=0.8,
+                    stabilization_seconds=10,
+                )
+                == 1
+            )
+            assert (await incidents.get_ticket(persisted.ticket_id)).status == TicketStatus.CLOSED
+
+
+@pytest.mark.asyncio
 async def test_two_independent_simulated_faults_remain_separate_through_restoration(
     analysis_harness: AnalysisHarness,
 ) -> None:

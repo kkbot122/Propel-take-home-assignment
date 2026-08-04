@@ -1,5 +1,5 @@
 from propel.analysis.models import FaultCandidate
-from propel.domain.enums import FaultClass, SuspectedAssetType, TicketStatus
+from propel.domain.enums import FaultClass, LocalizationPrecision, SuspectedAssetType, TicketStatus
 
 OPERATOR_TRANSITIONS = {
     TicketStatus.DETECTED: TicketStatus.ACKNOWLEDGED,
@@ -28,12 +28,18 @@ class AutomaticTransitionOnlyError(Exception):
 
 def incident_fingerprint(candidate: FaultCandidate) -> str:
     if candidate.classification == FaultClass.SPAN_FAULT:
+        if candidate.precision == LocalizationPrecision.CORRIDOR:
+            return (
+                f"corridor:{candidate.dt_id}:{candidate.parent_pole_id}..{candidate.child_pole_id}"
+            )
         return f"span:{candidate.dt_id}:{candidate.parent_pole_id}->{candidate.child_pole_id}"
     if candidate.classification == FaultClass.DT_FAULT:
         return f"dt:{candidate.dt_id}"
     if candidate.classification == FaultClass.FEEDER_FAULT:
         return f"feeder:{candidate.feeder_id}"
     if candidate.classification == FaultClass.UNCONFIRMED_OUTAGE:
+        if candidate.suspected_asset_type == SuspectedAssetType.DISTRIBUTION_TRANSFORMER:
+            return f"unconfirmed:dt:{candidate.dt_id}"
         return f"unconfirmed:feeder:{candidate.feeder_id}"
     if candidate.classification == FaultClass.SENSOR_ANOMALY:
         if candidate.suppression is None:

@@ -66,6 +66,32 @@ explainable without presenting an evidence score as a learned probability.
 incidents and tickets is intentionally deferred to VS-06 so localization remains
 separate from workflow persistence.
 
+## 2026-08-04 — Degrade surveyed gaps to explicit corridors
+
+**Chosen:** Treat a pole as usable localization evidence only when it has an
+active device observation that is healthy, recent, power-loss-capable, and in a
+`LIVE` or `DARK` state. `NO_DEVICE`, `STALE`, `UNKNOWN`, unhealthy, and incapable
+observations are gaps; they never increase dark corroboration.
+
+For a unique gap, persist a `LocalizationCorridor` containing the credible
+upstream-live bound, credible downstream-dark bound, ordered path, and skipped
+pole IDs. Corridor incidents keep surveyed topology provenance but use
+`CORRIDOR` precision, a `P-001..P-003` asset ID, a separate corridor fingerprint,
+and a score cap of 79. When no upper live bound exists, emit an
+`UNCONFIRMED_OUTAGE` at `DT_LEVEL` with a score cap of 49.
+
+**Reason:** Surveyed connectivity proves the order of possible spans, but a
+silent or missing sensor cannot prove which adjacent edge failed. Keeping the
+geometry in JSONB evidence avoids inventing a database span while still giving
+operators and the map a deterministic repair search area. Restoration freezes
+the corridor's persisted downstream-dark bound as its required pole instead of
+parsing the exact-span asset ID format.
+
+**Simulator boundary:** Fault requests may omit selected loss messages and may
+mark selected affected devices unavailable. Physical fault scope remains in the
+simulator table; power state still reaches the application only through public
+telemetry. Repair telemetry restores normal device health.
+
 ## 2026-08-04 — Serialize device state and acknowledge only after durable commit
 
 **Chosen:** Use one Redis consumer group with one MVP worker and serialize each

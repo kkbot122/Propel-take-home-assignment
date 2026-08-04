@@ -12,6 +12,7 @@ from propel.api.schemas.simulator import (
 from propel.api.schemas.telemetry import ErrorResponse
 from propel.infra.simulator import (
     ActiveSimulatorFaultError,
+    InvalidSimulatorNoiseError,
     InvalidSimulatorSpanError,
     MissingSimulatorDeviceError,
     PostgresSimulatorService,
@@ -58,6 +59,8 @@ async def inject_fault(
             parent_pole_id=payload.parent_pole_id,
             child_pole_id=payload.child_pole_id,
             feeder_id=payload.feeder_id,
+            missing_device_pole_ids=tuple(payload.missing_device_pole_ids),
+            omit_loss_pole_ids=tuple(payload.omit_loss_pole_ids),
         )
     except ActiveSimulatorFaultError:
         return error_response(
@@ -71,6 +74,13 @@ async def inject_fault(
             status.HTTP_409_CONFLICT,
             "INVALID_SIMULATOR_SPAN",
             "the requested surveyed span does not exist",
+            retryable=False,
+        )
+    except InvalidSimulatorNoiseError:
+        return error_response(
+            status.HTTP_409_CONFLICT,
+            "INVALID_SIMULATOR_NOISE",
+            "noise poles must be unique affected poles and cannot suppress every loss message",
             retryable=False,
         )
     except MissingSimulatorDeviceError:

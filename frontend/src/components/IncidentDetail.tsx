@@ -33,6 +33,20 @@ function evidenceReasons(incident: Incident | null): {
   }
 }
 
+function corridorEvidence(incident: Incident | null): {
+  orderedPoleIds: string[]
+  skippedPoleIds: string[]
+} | null {
+  if (!incident) return null
+  const candidate = incident.evidence.candidate
+  if (!isRecord(candidate) || !isRecord(candidate.corridor)) return null
+  const orderedPoleIds = stringList(candidate.corridor.ordered_pole_ids)
+  const skippedPoleIds = stringList(candidate.corridor.skipped_pole_ids)
+  return orderedPoleIds.length >= 3 && skippedPoleIds.length > 0
+    ? { orderedPoleIds, skippedPoleIds }
+    : null
+}
+
 function statusLabel(status: TicketStatus): string {
   return status.replaceAll('_', ' ')
 }
@@ -56,6 +70,7 @@ export function IncidentDetail({
 }: IncidentDetailProps) {
   const [crew, setCrew] = useState('Crew-7')
   const reasons = evidenceReasons(incident)
+  const corridor = corridorEvidence(incident)
 
   function assignCrew(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -100,7 +115,9 @@ export function IncidentDetail({
           <p className="section-label">
             {suppressed ? 'Suppressed diagnostic' : 'Probable root fault'}
           </p>
-          <h2 id="detail-title">{incident.suspected_asset_id.replace('->', ' → ')}</h2>
+          <h2 id="detail-title">
+            {incident.suspected_asset_id.replace('->', ' → ').replace('..', ' ⇢ ')}
+          </h2>
         </div>
         <span className={`status-pill status-${suppressed ? 'suppressed' : status?.toLowerCase()}`}>
           {suppressed ? 'SUPPRESSED' : status ? statusLabel(status) : 'NO TICKET'}
@@ -132,12 +149,29 @@ export function IncidentDetail({
         <span style={{ width: `${incident.confidence_score}%` }} />
       </div>
 
+      {corridor && (
+        <div className="precision-notice" role="status">
+          <strong>Exact span intentionally withheld</strong>
+          <span>Bounded corridor: {corridor.orderedPoleIds.join(' → ')}</span>
+          <small>Unusable observations: {corridor.skippedPoleIds.join(', ')}</small>
+        </div>
+      )}
+
+      {incident.precision === 'DT_LEVEL' && incident.classification === 'UNCONFIRMED_OUTAGE' && (
+        <div className="precision-notice dt-level" role="status">
+          <strong>Transformer-level location only</strong>
+          <span>No trustworthy live-to-dark corridor can be bounded from current evidence.</span>
+        </div>
+      )}
+
       <section className="evidence-section" aria-labelledby="evidence-title">
         <div className="subheading-row">
           <h3 id="evidence-title">
             {suppressed
               ? 'Why Propel suppressed dispatch'
-              : `Why Propel chose this ${incident.suspected_asset_type
+              : corridor
+                ? 'Why Propel chose this corridor'
+                : `Why Propel chose this ${incident.suspected_asset_type
                   .replaceAll('_', ' ')
                   .toLowerCase()}`}
           </h3>

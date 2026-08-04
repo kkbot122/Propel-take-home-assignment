@@ -34,6 +34,7 @@ from propel.incidents.restoration import (
     REPAIR_NOT_VERIFIED,
     RESTORATION_VERIFIED,
     RestorationPoleEvidence,
+    required_span_restoration_pole_id,
     restoration_decision,
 )
 from propel.incidents.workflow import incident_fingerprint, require_operator_transition
@@ -472,7 +473,11 @@ class PostgresIncidentService:
         ).all()
         required_pole_ids: set[str]
         if incident.suspected_asset_type == SuspectedAssetType.SPAN:
-            required_pole_ids = {incident.suspected_asset_id.rpartition("->")[2]}
+            required_span_pole_id = required_span_restoration_pole_id(
+                incident.suspected_asset_id,
+                incident.evidence,
+            )
+            required_pole_ids = {required_span_pole_id} if required_span_pole_id else set()
         else:
             incident_pole_ids = tuple(row.id for row in rows)
             latest_topology = (

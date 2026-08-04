@@ -15,6 +15,7 @@ from propel.analysis.models import (
 from propel.domain.enums import (
     DeviceHealthStatus,
     FaultClass,
+    LocalizationPrecision,
     PoleStatus,
     SuspectedAssetType,
     TicketStatus,
@@ -79,6 +80,17 @@ def test_span_fingerprint_is_stable_for_same_boundary() -> None:
     assert incident_fingerprint(replace(candidate, confidence_score=72)) == incident_fingerprint(
         candidate
     )
+
+
+def test_corridor_fingerprint_does_not_claim_an_exact_span() -> None:
+    candidate = replace(
+        span_candidate(),
+        precision=LocalizationPrecision.CORRIDOR,
+        suspected_asset_id="P-001..P-003",
+        child_pole_id="P-003",
+    )
+
+    assert incident_fingerprint(candidate) == "corridor:DT-001:P-001..P-003"
 
 
 def test_suppressed_candidate_fingerprints_are_stable_domain_keys() -> None:

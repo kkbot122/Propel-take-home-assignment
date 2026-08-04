@@ -415,7 +415,128 @@ def test_stale_live_parent_cannot_establish_an_exact_boundary() -> None:
         )
     )
 
-    assert localize_known_topology(snapshot) == []
+    candidate = localize_known_topology(snapshot)[0]
+
+    assert candidate.precision == LocalizationPrecision.DT_LEVEL
+    assert candidate.classification == FaultClass.UNCONFIRMED_OUTAGE
+
+
+def test_missing_boundary_child_degrades_exact_span_to_ordered_corridor() -> None:
+    snapshot = fixed_fault_snapshot()
+    missing = replace(
+        snapshot.poles[1],
+        state=PoleStatus.NO_DEVICE,
+        state_received_at=None,
+        device=None,
+    )
+    snapshot = replace(snapshot, poles=(snapshot.poles[0], missing, *snapshot.poles[2:]))
+
+    candidate = localize_known_topology(snapshot)[0]
+
+    assert candidate.classification == FaultClass.SPAN_FAULT
+    assert candidate.precision == LocalizationPrecision.CORRIDOR
+    assert candidate.suspected_asset_id == "P-001..P-003"
+    assert candidate.parent_pole_id == "P-001"
+    assert candidate.child_pole_id == "P-003"
+    assert candidate.affected_pole_ids == ("P-003", "P-004")
+    assert candidate.confidence_score <= 79
+    assert candidate.evidence.corridor is not None
+    assert candidate.evidence.corridor.ordered_pole_ids == (
+        "P-001",
+        "P-002",
+        "P-003",
+    )
+    assert candidate.evidence.corridor.skipped_pole_ids == ("P-002",)
+    assert candidate.evidence.unusable_pole_ids == ("P-002",)
+
+
+def test_stale_device_is_a_gap_and_never_dark_corroboration() -> None:
+    snapshot = fixed_fault_snapshot()
+    stale = replace(
+        snapshot.poles[1],
+        state=PoleStatus.STALE,
+        state_received_at=ANALYSIS_AT - timedelta(minutes=33),
+        device=replace(
+            snapshot.poles[1].device,
+            status=DeviceHealthStatus.STALE,
+            last_seen_at=ANALYSIS_AT - timedelta(minutes=33),
+        ),
+    )
+    snapshot = replace(snapshot, poles=(snapshot.poles[0], stale, *snapshot.poles[2:]))
+
+    candidate = localize_known_topology(snapshot)[0]
+
+    assert candidate.precision == LocalizationPrecision.CORRIDOR
+    assert candidate.evidence.dark_pole_count == 2
+    assert candidate.affected_pole_ids == ("P-003", "P-004")
+    assert "P-002" in candidate.evidence.unusable_pole_ids
+
+
+def test_unrelated_missing_device_does_not_weaken_known_exact_boundary() -> None:
+    snapshot = fixed_fault_snapshot()
+    missing_terminal = replace(
+        snapshot.poles[3],
+        state=PoleStatus.NO_DEVICE,
+        state_received_at=None,
+        device=None,
+    )
+    snapshot = replace(snapshot, poles=(*snapshot.poles[:3], missing_terminal))
+
+    candidate = localize_known_topology(snapshot)[0]
+
+    assert candidate.precision == LocalizationPrecision.EXACT_SPAN
+    assert candidate.suspected_asset_id == "P-001->P-002"
+    assert candidate.affected_pole_ids == ("P-002", "P-003")
+
+
+def test_unbounded_multiple_gaps_degrade_to_dt_level() -> None:
+    snapshot = fixed_fault_snapshot()
+    missing_root = replace(
+        snapshot.poles[0],
+        state=PoleStatus.NO_DEVICE,
+        state_received_at=None,
+        device=None,
+    )
+    stale_second = replace(
+        snapshot.poles[1],
+        state=PoleStatus.STALE,
+        state_received_at=ANALYSIS_AT - timedelta(minutes=33),
+        device=replace(
+            snapshot.poles[1].device,
+            status=DeviceHealthStatus.STALE,
+            last_seen_at=ANALYSIS_AT - timedelta(minutes=33),
+        ),
+    )
+    snapshot = replace(snapshot, poles=(missing_root, stale_second, *snapshot.poles[2:]))
+
+    candidate = localize_known_topology(snapshot)[0]
+
+    assert candidate.classification == FaultClass.UNCONFIRMED_OUTAGE
+    assert candidate.suspected_asset_type == SuspectedAssetType.DISTRIBUTION_TRANSFORMER
+    assert candidate.precision == LocalizationPrecision.DT_LEVEL
+    assert candidate.affected_pole_ids == ("P-003", "P-004")
+    assert candidate.confidence_score <= 49
+    assert candidate.evidence.corridor is None
+    assert candidate.evidence.unusable_pole_ids == ("P-001", "P-002")
+
+
+def test_corridor_result_is_deterministic_when_snapshot_order_changes() -> None:
+    snapshot = fixed_fault_snapshot()
+    missing = replace(
+        snapshot.poles[1],
+        state=PoleStatus.NO_DEVICE,
+        state_received_at=None,
+        device=None,
+    )
+    snapshot = replace(snapshot, poles=(snapshot.poles[0], missing, *snapshot.poles[2:]))
+
+    assert localize_known_topology(snapshot) == localize_known_topology(
+        replace(
+            snapshot,
+            poles=tuple(reversed(snapshot.poles)),
+            spans=tuple(reversed(snapshot.spans)),
+        )
+    )
 
 
 def test_invalid_surveyed_cycle_is_rejected() -> None:

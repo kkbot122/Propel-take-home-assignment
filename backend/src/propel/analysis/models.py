@@ -122,6 +122,32 @@ class ConfidenceComponents:
 
 
 @dataclass(frozen=True, slots=True)
+class LocalizationCorridor:
+    upstream_pole_id: str
+    downstream_pole_id: str
+    ordered_pole_ids: tuple[str, ...]
+    skipped_pole_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.ordered_pole_ids) < 3 or not self.skipped_pole_ids:
+            raise ValueError("a corridor requires two bounds and at least one skipped pole")
+        if self.ordered_pole_ids[0] != self.upstream_pole_id:
+            raise ValueError("corridor must start at its upstream bound")
+        if self.ordered_pole_ids[-1] != self.downstream_pole_id:
+            raise ValueError("corridor must end at its downstream bound")
+        if self.ordered_pole_ids[1:-1] != self.skipped_pole_ids:
+            raise ValueError("corridor skipped poles must be ordered between its bounds")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "upstream_pole_id": self.upstream_pole_id,
+            "downstream_pole_id": self.downstream_pole_id,
+            "ordered_pole_ids": list(self.ordered_pole_ids),
+            "skipped_pole_ids": list(self.skipped_pole_ids),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CandidateEvidence:
     onset_at: datetime
     subtree_pole_ids: tuple[str, ...]
@@ -133,6 +159,8 @@ class CandidateEvidence:
     positive_reasons: tuple[str, ...]
     negative_reasons: tuple[str, ...]
     components: ConfidenceComponents
+    unusable_pole_ids: tuple[str, ...] = ()
+    corridor: LocalizationCorridor | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -146,6 +174,8 @@ class CandidateEvidence:
             "positive_reasons": list(self.positive_reasons),
             "negative_reasons": list(self.negative_reasons),
             "components": self.components.as_dict(),
+            "unusable_pole_ids": list(self.unusable_pole_ids),
+            "corridor": self.corridor.as_dict() if self.corridor is not None else None,
         }
 
 

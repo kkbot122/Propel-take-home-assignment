@@ -5,6 +5,7 @@ from propel.incidents.restoration import (
     REPAIR_NOT_VERIFIED,
     RESTORATION_VERIFIED,
     RestorationPoleEvidence,
+    required_span_restoration_pole_id,
     restoration_decision,
 )
 
@@ -27,6 +28,24 @@ def evidence(
         device_timestamp=device_timestamp or received_at,
         exclusion_reason=None if eligible else "NO_DEVICE",
     )
+
+
+def test_corridor_restoration_uses_persisted_downstream_bound() -> None:
+    incident_evidence = {
+        "candidate": {
+            "corridor": {
+                "upstream_pole_id": "P-001",
+                "downstream_pole_id": "P-003",
+                "ordered_pole_ids": ["P-001", "P-002", "P-003"],
+                "skipped_pole_ids": ["P-002"],
+            }
+        }
+    }
+
+    assert (
+        required_span_restoration_pole_id("P-001..P-003", incident_evidence) == "P-003"
+    )
+    assert required_span_restoration_pole_id("P-001->P-002", {}) == "P-002"
 
 
 def test_dark_boundary_keeps_repair_unverified() -> None:

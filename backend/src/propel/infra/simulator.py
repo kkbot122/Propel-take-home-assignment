@@ -4,12 +4,17 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import httpx
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
-from propel.domain.enums import SimulatorFaultStatus, SimulatorFaultType, TelemetryEventType
+from propel.domain.enums import (
+    DeviceHealthStatus,
+    SimulatorFaultStatus,
+    SimulatorFaultType,
+    TelemetryEventType,
+)
 from propel.infra.database.models import (
     Device,
     DeviceBinding,
@@ -48,12 +53,17 @@ class InvalidSimulatorSpanError(Exception):
     pass
 
 
+class InvalidSimulatorNoiseError(Exception):
+    pass
+
+
 class MissingSimulatorDeviceError(Exception):
     pass
 
 
 @dataclass(frozen=True, slots=True)
 class SimulatorDevice:
+    internal_device_id: int
     device_id: str
     installed_firmware: str | None
     last_sequence: int | None
@@ -116,6 +126,8 @@ class PostgresSimulatorService:
         dt_id: str,
         parent_pole_id: str,
         child_pole_id: str,
+        missing_device_pole_ids: tuple[str, ...] = (),
+        omit_loss_pole_ids: tuple[str, ...] = (),
     ) -> SimulatedFaultView:
         injected_at = self._clock()
         try:
@@ -130,6 +142,11 @@ class PostgresSimulatorService:
                     transformer_id,
                     parent_pole_id,
                     child_pole_id,
+                )
+                omitted_ids = self._validate_noise(
+                    affected_ids,
+                    missing_device_pole_ids,
+                    omit_loss_pole_ids,
                 )
                 active_faults = await self._locked_active_faults(session)
                 resumable = next(
@@ -182,6 +199,8 @@ class PostgresSimulatorService:
                     parent_pole_id,
                     tuple(fault.deenergized_pole_ids),
                     fault.injected_at,
+                    omitted_ids,
+                    missing_device_pole_ids,
                 )
                 receipts = await self._emit_all(commands)
                 fault.injection_telemetry_at = max(receipt.received_at for receipt in receipts)
@@ -196,6 +215,8 @@ class PostgresSimulatorService:
         *,
         dt_id: str,
         feeder_id: str,
+        missing_device_pole_ids: tuple[str, ...] = (),
+        omit_loss_pole_ids: tuple[str, ...] = (),
     ) -> SimulatedFaultView:
         if fault_type not in (SimulatorFaultType.DT_FAULT, SimulatorFaultType.FEEDER_FAULT):
             raise InvalidSimulatorSpanError
@@ -216,6 +237,11 @@ class PostgresSimulatorService:
                 else:
                     pole_statement = pole_statement.where(Pole.feeder_id == feeder_internal_id)
                 affected_ids = tuple(await session.scalars(pole_statement.order_by(Pole.pole_id)))
+                omitted_ids = self._validate_noise(
+                    affected_ids,
+                    missing_device_pole_ids,
+                    omit_loss_pole_ids,
+                )
                 active_faults = await self._locked_active_faults(session)
                 self._require_independent_scope(active_faults, affected_ids)
                 fault = SimulatedFault(
@@ -258,6 +284,8 @@ class PostgresSimulatorService:
                     None,
                     tuple(fault.deenergized_pole_ids),
                     fault.injected_at,
+                    omitted_ids,
+                    missing_device_pole_ids,
                 )
                 receipts = await self._emit_all(commands)
                 fault.injection_telemetry_at = max(receipt.received_at for receipt in receipts)
@@ -293,6 +321,27 @@ class PostgresSimulatorService:
         requested = set(affected_ids)
         if any(requested.intersection(fault.deenergized_pole_ids) for fault in active_faults):
             raise ActiveSimulatorFaultError
+
+    @staticmethod
+    def _validate_noise(
+        affected_ids: Sequence[str],
+        missing_device_pole_ids: Sequence[str],
+        omit_loss_pole_ids: Sequence[str],
+    ) -> tuple[str, ...]:
+        affected = set(affected_ids)
+        missing = set(missing_device_pole_ids)
+        omitted = set(omit_loss_pole_ids)
+        if (
+            len(missing) != len(missing_device_pole_ids)
+            or len(omitted) != len(omit_loss_pole_ids)
+            or not missing.issubset(affected)
+            or not omitted.issubset(affected)
+        ):
+            raise InvalidSimulatorNoiseError
+        all_omitted = missing | omitted
+        if all_omitted == affected:
+            raise InvalidSimulatorNoiseError
+        return tuple(sorted(all_omitted))
 
     async def repair_fault(self, fault_id: UUID) -> SimulatedFaultView:
         repair_at = self._clock()
@@ -403,6 +452,7 @@ class PostgresSimulatorService:
             await session.execute(
                 select(
                     Pole.pole_id,
+                    Device.id.label("internal_device_id"),
                     Device.device_id,
                     Device.installed_firmware,
                     DeviceHealth.last_sequence,
@@ -416,6 +466,7 @@ class PostgresSimulatorService:
         ).all()
         result = {
             row.pole_id: SimulatorDevice(
+                internal_device_id=row.internal_device_id,
                 device_id=row.device_id,
                 installed_firmware=row.installed_firmware,
                 last_sequence=row.last_sequence,
@@ -433,13 +484,30 @@ class PostgresSimulatorService:
         parent_pole_id: str | None,
         affected_ids: tuple[str, ...],
         occurred_at: datetime,
+        omitted_loss_pole_ids: tuple[str, ...] = (),
+        missing_device_pole_ids: tuple[str, ...] = (),
     ) -> tuple[TelemetryCommand, ...]:
         pole_ids = ((parent_pole_id,) if parent_pole_id is not None else ()) + affected_ids
         rows = await self._device_rows(session, pole_ids)
+        if missing_device_pole_ids:
+            missing_device_ids = tuple(
+                rows[pole_id].internal_device_id for pole_id in missing_device_pole_ids
+            )
+            await session.execute(
+                update(DeviceHealth)
+                .where(DeviceHealth.device_id.in_(missing_device_ids))
+                .values(
+                    status=DeviceHealthStatus.STALE,
+                    status_reason="simulator_missing_device",
+                    updated_at=occurred_at,
+                )
+            )
         commands: list[TelemetryCommand] = []
         for pole_id in pole_ids:
             row = rows[pole_id]
             is_affected = pole_id in affected_ids
+            if is_affected and pole_id in omitted_loss_pole_ids:
+                continue
             commands.append(
                 self._command(
                     row,
@@ -548,15 +616,21 @@ class PostgresSimulatorService:
         parent_pole_id: str,
         child_pole_id: str,
         feeder_id: str = "FDR-001",
+        missing_device_pole_ids: tuple[str, ...] = (),
+        omit_loss_pole_ids: tuple[str, ...] = (),
     ) -> SimulatedFaultView:
         if fault_type == SimulatorFaultType.SPAN_FAULT:
             return await self.inject_fixed_span_fault(
                 dt_id=dt_id,
                 parent_pole_id=parent_pole_id,
                 child_pole_id=child_pole_id,
+                missing_device_pole_ids=missing_device_pole_ids,
+                omit_loss_pole_ids=omit_loss_pole_ids,
             )
         return await self._inject_fixed_scope_fault(
             fault_type,
             dt_id=dt_id,
             feeder_id=feeder_id,
+            missing_device_pole_ids=missing_device_pole_ids,
+            omit_loss_pole_ids=omit_loss_pole_ids,
         )

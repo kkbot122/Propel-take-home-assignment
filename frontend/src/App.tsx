@@ -56,6 +56,17 @@ function faultAssetId(fault: SimulatedFault): string | null {
   return fault.fault_type === 'DT_FAULT' ? fault.dt_id : fault.feeder_id
 }
 
+function faultExplainsIncident(fault: SimulatedFault, incident: Incident | null): boolean {
+  if (!incident) return false
+  if (faultAssetId(fault) === incident.suspected_asset_id) return true
+  return (
+    incident.precision === 'CORRIDOR' &&
+    incident.classification === 'SPAN_FAULT' &&
+    incident.affected_pole_ids.length > 0 &&
+    incident.affected_pole_ids.every((poleId) => fault.deenergized_pole_ids.includes(poleId))
+  )
+}
+
 export function App() {
   const queryClient = useQueryClient()
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null)
@@ -119,8 +130,7 @@ export function App() {
   )
   const selectedIncident: Incident | null = incidentQuery.data ?? selectedSummary
   const selectedSimulatorFault =
-    activeFaults.find((fault) => faultAssetId(fault) === selectedIncident?.suspected_asset_id) ??
-    null
+    activeFaults.find((fault) => faultExplainsIncident(fault, selectedIncident)) ?? null
   const selectedTicketId = selectedIncident?.ticket_id ?? null
   const ticketQuery = useQuery({
     queryKey: ['ticket', selectedTicketId],
@@ -312,6 +322,33 @@ export function App() {
               setSelectedIncidentId(null)
               simulatorMutation.mutate({
                 action: 'inject',
+                request: {
+                  fault_type: 'SPAN_FAULT',
+                  dt_id: 'DT-001',
+                  parent_pole_id: 'P-001',
+                  child_pole_id: 'P-002',
+                  missing_device_pole_ids: ['P-002'],
+                },
+              })
+            }}
+            disabled={
+              operationPending ||
+              activeFaults.some((fault) =>
+                fault.deenergized_pole_ids.some((poleId) =>
+                  ['P-002', 'P-003', 'P-004'].includes(poleId),
+                ),
+              )
+            }
+          >
+            Inject corridor fault
+          </button>
+          <button
+            type="button"
+            className="inject-button"
+            onClick={() => {
+              setSelectedIncidentId(null)
+              simulatorMutation.mutate({
+                action: 'inject',
                 request: { fault_type: 'DT_FAULT', dt_id: 'DT-001' },
               })
             }}
@@ -393,7 +430,11 @@ export function App() {
               <h2 id="map-title">FDR-001 network</h2>
             </div>
             <span className="map-focus-label">
-              {selectedIncident ? `Focused · ${selectedIncident.suspected_asset_id.replace('->', ' → ')}` : 'Network overview'}
+              {selectedIncident
+                ? `Focused · ${selectedIncident.suspected_asset_id
+                    .replace('->', ' → ')
+                    .replace('..', ' ⇢ ')}`
+                : 'Network overview'}
             </span>
           </div>
           {(polesQuery.isPending && !polesQuery.data) ||
@@ -451,7 +492,7 @@ export function App() {
       </section>
 
       <footer className="app-footer">
-        <span>Propel · PB-03 simultaneous surveyed faults</span>
+        <span>Propel · PB-04 honest corridor precision</span>
         <span>Polling every 5 seconds · verification remains telemetry-only</span>
       </footer>
     </main>

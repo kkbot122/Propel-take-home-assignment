@@ -25,7 +25,7 @@ Optimize in this order:
 - [x] PB-01 — Sensor anomaly and scheduled-outage suppression
 - [x] PB-02 — DT and feeder fault classification
 - [x] PB-03 — Multiple simultaneous surveyed faults
-- [ ] PB-04 — Missing-device corridors and degraded precision
+- [x] PB-04 — Missing-device corridors and degraded precision
 - [ ] PB-05 — Unknown-topology inference and localization
 - [ ] PB-06 — Confidence scoring and evidence calibration
 - [ ] PB-07 — Realistic multi-feeder network and telemetry generator
@@ -208,30 +208,30 @@ more poles cannot provide usable state evidence.
 
 ### Implementation
 
-- [ ] Distinguish `NO_DEVICE`, unhealthy, stale, and temporarily missing evidence.
-- [ ] Identify the last credible upstream live observation and first credible
+- [x] Distinguish `NO_DEVICE`, unhealthy, stale, and temporarily missing evidence.
+- [x] Identify the last credible upstream live observation and first credible
       downstream dark observation around a gap.
-- [ ] Add a corridor value containing ordered bounding poles and skipped gaps.
-- [ ] Return `CORRIDOR` when a unique exact boundary cannot be proven.
-- [ ] Return `DT_LEVEL` when even a bounded corridor is not defensible.
-- [ ] Prevent missing evidence from being counted as dark corroboration.
-- [ ] Cap confidence according to precision and evidence quality.
-- [ ] Persist corridor geometry/evidence without inventing a surveyed span.
-- [ ] Render corridor and DT-level results distinctly on the map and detail panel.
-- [ ] Add simulator noise options for missing devices and omitted loss messages.
+- [x] Add a corridor value containing ordered bounding poles and skipped gaps.
+- [x] Return `CORRIDOR` when a unique exact boundary cannot be proven.
+- [x] Return `DT_LEVEL` when even a bounded corridor is not defensible.
+- [x] Prevent missing evidence from being counted as dark corroboration.
+- [x] Cap confidence according to precision and evidence quality.
+- [x] Persist corridor geometry/evidence without inventing a surveyed span.
+- [x] Render corridor and DT-level results distinctly on the map and detail panel.
+- [x] Add simulator noise options for missing devices and omitted loss messages.
 
 ### Required tests
 
-- [ ] A missing boundary-child device degrades `EXACT_SPAN` to `CORRIDOR`.
-- [ ] Multiple unresolved gaps degrade to `DT_LEVEL` when appropriate.
-- [ ] A stale device is not treated as dark.
-- [ ] A known exact span remains exact when unrelated devices are missing.
-- [ ] Corridor endpoints and affected sets are deterministic.
-- [ ] The API never labels corridor evidence as a surveyed exact span.
+- [x] A missing boundary-child device degrades `EXACT_SPAN` to `CORRIDOR`.
+- [x] Multiple unresolved gaps degrade to `DT_LEVEL` when appropriate.
+- [x] A stale device is not treated as dark.
+- [x] A known exact span remains exact when unrelated devices are missing.
+- [x] Corridor endpoints and affected sets are deterministic.
+- [x] The API never labels corridor evidence as a surveyed exact span.
 
 ### Exit condition
 
-- [ ] Every surveyed-network result is either exact or explicitly degraded, with
+- [x] Every surveyed-network result is either exact or explicitly degraded, with
       no precision claim stronger than its observations support.
 
 ---

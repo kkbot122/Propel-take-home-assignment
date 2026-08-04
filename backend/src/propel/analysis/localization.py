@@ -1,5 +1,5 @@
 from collections import defaultdict
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import timedelta
 
 from propel.analysis.models import (
@@ -8,6 +8,7 @@ from propel.analysis.models import (
     ConfidenceComponents,
     FaultCandidate,
     FeederTransformerEvidence,
+    LocalizationCorridor,
     NetworkSnapshot,
     PoleEvidence,
     ScheduledOutageWindow,
@@ -35,6 +36,14 @@ DEFAULT_FEEDER_MIN_DTS = 2
 
 class InvalidTopologySnapshotError(Exception):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundaryLocalization:
+    upstream_pole_id: str
+    downstream_pole_id: str
+    subtree_root_pole_id: str
+    corridor: LocalizationCorridor | None = None
 
 
 def localize_known_topology(
@@ -134,46 +143,81 @@ def _build_span_candidates(
     schedule_overrun_grace: timedelta,
 ) -> list[FaultCandidate]:
     candidates: list[FaultCandidate] = []
-    boundaries: list[TopologySpan] = []
+    boundaries: list[_BoundaryLocalization] = []
     subtrees: dict[str, tuple[str, ...]] = {}
-    for span in sorted(spans, key=lambda item: (item.parent_pole_id or "", item.child_pole_id)):
-        if span.parent_pole_id is None:
+    parent_by_child = {span.child_pole_id: span.parent_pole_id for span in spans}
+    for child in sorted(poles.values(), key=lambda item: item.pole_id):
+        if not _is_credible_dark(child, snapshot, live_freshness):
             continue
-        parent = poles[span.parent_pole_id]
-        child = poles[span.child_pole_id]
-        if not _is_recent_live(parent, snapshot, live_freshness):
+        parent_id = parent_by_child.get(child.pole_id)
+        if parent_id is None:
             continue
-        if child.state != PoleStatus.DARK or child.state_received_at is None:
+        parent = poles[parent_id]
+        if _is_credible_dark(parent, snapshot, live_freshness):
             continue
-        boundaries.append(span)
-        subtrees[span.child_pole_id] = _collect_subtree(span.child_pole_id, children)
+        if _is_recent_live(parent, snapshot, live_freshness):
+            boundary = _BoundaryLocalization(parent.pole_id, child.pole_id, child.pole_id)
+        else:
+            boundary = _find_corridor_boundary(
+                child,
+                poles,
+                parent_by_child,
+                snapshot,
+                live_freshness,
+            )
+            if boundary is None:
+                continue
+        boundaries.append(boundary)
+        subtrees[boundary.subtree_root_pole_id] = _collect_subtree(
+            boundary.subtree_root_pole_id, children
+        )
 
     assigned_dark: dict[str, list[str]] = defaultdict(list)
     for pole in sorted(poles.values(), key=lambda item: item.pole_id):
-        if pole.state != PoleStatus.DARK:
+        if not _is_credible_dark(pole, snapshot, live_freshness):
             continue
         containing_boundaries = tuple(
-            boundary for boundary in boundaries if pole.pole_id in subtrees[boundary.child_pole_id]
+            boundary
+            for boundary in boundaries
+            if pole.pole_id in subtrees[boundary.subtree_root_pole_id]
         )
         if not containing_boundaries:
             continue
         nearest = min(
             containing_boundaries,
             key=lambda boundary: (
-                len(subtrees[boundary.child_pole_id]),
-                boundary.child_pole_id,
+                len(subtrees[boundary.subtree_root_pole_id]),
+                boundary.downstream_pole_id,
             ),
         )
-        assigned_dark[nearest.child_pole_id].append(pole.pole_id)
+        assigned_dark[nearest.downstream_pole_id].append(pole.pole_id)
 
-    for span in boundaries:
-        subtree_ids = subtrees[span.child_pole_id]
-        candidate = _build_candidate(
-            snapshot,
-            span,
-            poles,
-            subtree_ids,
-            tuple(assigned_dark[span.child_pole_id]),
+    for boundary in boundaries:
+        subtree_ids = subtrees[boundary.subtree_root_pole_id]
+        assigned_ids = tuple(assigned_dark[boundary.downstream_pole_id])
+        if not assigned_ids:
+            continue
+        candidate = (
+            _build_candidate(
+                snapshot,
+                TopologySpan(
+                    boundary.upstream_pole_id,
+                    boundary.downstream_pole_id,
+                    TopologySource.SURVEYED,
+                    1.0,
+                ),
+                poles,
+                subtree_ids,
+                assigned_ids,
+            )
+            if boundary.corridor is None
+            else _build_corridor_candidate(
+                snapshot,
+                boundary.corridor,
+                poles,
+                subtree_ids,
+                assigned_ids,
+            )
         )
         candidates.append(
             _classify_span_candidate(
@@ -186,7 +230,52 @@ def _build_span_candidates(
             )
         )
 
+    assigned_ids = {pole_id for pole_ids in assigned_dark.values() for pole_id in pole_ids}
+    unbounded_dark_ids = tuple(
+        pole.pole_id
+        for pole in sorted(poles.values(), key=lambda item: item.pole_id)
+        if _is_credible_dark(pole, snapshot, live_freshness) and pole.pole_id not in assigned_ids
+    )
+    if unbounded_dark_ids:
+        candidates.append(
+            _build_degraded_dt_candidate(snapshot, poles, unbounded_dark_ids, live_freshness)
+        )
+
     return sorted(candidates, key=lambda candidate: candidate.suspected_asset_id)
+
+
+def _find_corridor_boundary(
+    downstream: PoleEvidence,
+    poles: dict[str, PoleEvidence],
+    parent_by_child: dict[str, str | None],
+    snapshot: NetworkSnapshot,
+    live_freshness: timedelta,
+) -> _BoundaryLocalization | None:
+    skipped_downstream_to_upstream: list[str] = []
+    parent_id = parent_by_child.get(downstream.pole_id)
+    while parent_id is not None:
+        parent = poles[parent_id]
+        if _is_credible_dark(parent, snapshot, live_freshness):
+            return None
+        if _is_recent_live(parent, snapshot, live_freshness):
+            skipped = tuple(reversed(skipped_downstream_to_upstream))
+            if not skipped:
+                return None
+            corridor = LocalizationCorridor(
+                upstream_pole_id=parent.pole_id,
+                downstream_pole_id=downstream.pole_id,
+                ordered_pole_ids=(parent.pole_id, *skipped, downstream.pole_id),
+                skipped_pole_ids=skipped,
+            )
+            return _BoundaryLocalization(
+                upstream_pole_id=parent.pole_id,
+                downstream_pole_id=downstream.pole_id,
+                subtree_root_pole_id=downstream.pole_id,
+                corridor=corridor,
+            )
+        skipped_downstream_to_upstream.append(parent.pole_id)
+        parent_id = parent_by_child.get(parent.pole_id)
+    return None
 
 
 def _snapshot_transformers(
@@ -223,12 +312,7 @@ def _build_dt_candidate(
     observable = tuple(
         pole
         for pole in transformer.poles
-        if pole.device is not None
-        and pole.device.status == DeviceHealthStatus.HEALTHY
-        and pole.device.can_report_power_loss
-        and pole.device.last_seen_at is not None
-        and timedelta(0) <= snapshot.analysis_at - pole.device.last_seen_at <= live_freshness
-        and pole.state != PoleStatus.NO_DEVICE
+        if _has_usable_device_evidence(pole, snapshot, live_freshness)
     )
     dark = tuple(pole for pole in observable if pole.state == PoleStatus.DARK)
     if not observable or not dark or any(pole.state_received_at is None for pole in dark):
@@ -345,12 +429,7 @@ def _build_feeder_candidate(
         transformer
         for transformer in transformers
         if any(
-            pole.device is not None
-            and pole.device.status == DeviceHealthStatus.HEALTHY
-            and pole.device.can_report_power_loss
-            and pole.device.last_seen_at is not None
-            and timedelta(0) <= snapshot.analysis_at - pole.device.last_seen_at <= live_freshness
-            and pole.state != PoleStatus.NO_DEVICE
+            _has_usable_device_evidence(pole, snapshot, live_freshness)
             for pole in transformer.poles
         )
     )
@@ -545,6 +624,7 @@ def _matching_scheduled_outage(
         if scope == ScheduledOutageScope.SPAN:
             return (
                 candidate.suspected_asset_type == SuspectedAssetType.SPAN
+                and candidate.precision == LocalizationPrecision.EXACT_SPAN
                 and scope_id == f"{candidate.parent_pole_id}->{candidate.child_pole_id}"
             )
         if scope == ScheduledOutageScope.DISTRIBUTION_TRANSFORMER:
@@ -619,10 +699,47 @@ def _is_recent_live(
     snapshot: NetworkSnapshot,
     live_freshness: timedelta,
 ) -> bool:
-    if pole.state != PoleStatus.LIVE or pole.state_received_at is None:
+    if (
+        pole.state != PoleStatus.LIVE
+        or pole.state_received_at is None
+        or not _has_usable_device_evidence(pole, snapshot, live_freshness)
+    ):
         return False
     age = snapshot.analysis_at - pole.state_received_at
     return timedelta(0) <= age <= live_freshness
+
+
+def _is_credible_dark(
+    pole: PoleEvidence,
+    snapshot: NetworkSnapshot,
+    freshness: timedelta,
+) -> bool:
+    if (
+        pole.state != PoleStatus.DARK
+        or pole.state_received_at is None
+        or not _has_usable_device_evidence(pole, snapshot, freshness)
+    ):
+        return False
+    age = snapshot.analysis_at - pole.state_received_at
+    return timedelta(0) <= age <= freshness
+
+
+def _has_usable_device_evidence(
+    pole: PoleEvidence,
+    snapshot: NetworkSnapshot,
+    freshness: timedelta,
+) -> bool:
+    device = pole.device
+    if (
+        device is None
+        or device.status != DeviceHealthStatus.HEALTHY
+        or not device.can_report_power_loss
+        or device.last_seen_at is None
+        or pole.state in (PoleStatus.NO_DEVICE, PoleStatus.STALE, PoleStatus.UNKNOWN)
+    ):
+        return False
+    age = snapshot.analysis_at - device.last_seen_at
+    return timedelta(0) <= age <= freshness
 
 
 def _build_candidate(
@@ -640,7 +757,9 @@ def _build_candidate(
 
     subtree = tuple(poles[pole_id] for pole_id in subtree_ids)
     observable = tuple(
-        pole for pole in subtree if pole.device is not None and pole.state != PoleStatus.NO_DEVICE
+        pole
+        for pole in subtree
+        if _has_usable_device_evidence(pole, snapshot, DEFAULT_LIVE_FRESHNESS)
     )
     assigned_dark = set(assigned_dark_ids)
     dark = tuple(
@@ -716,6 +835,187 @@ def _build_candidate(
             positive_reasons=positive_reasons,
             negative_reasons=negative_reasons,
             components=components,
+        ),
+    )
+
+
+def _build_corridor_candidate(
+    snapshot: NetworkSnapshot,
+    corridor: LocalizationCorridor,
+    poles: dict[str, PoleEvidence],
+    subtree_ids: tuple[str, ...],
+    assigned_dark_ids: tuple[str, ...],
+) -> FaultCandidate:
+    upstream = poles[corridor.upstream_pole_id]
+    downstream = poles[corridor.downstream_pole_id]
+    assert downstream.state_received_at is not None
+    onset_at = downstream.state_received_at
+    subtree = tuple(poles[pole_id] for pole_id in subtree_ids)
+    observable = tuple(
+        pole
+        for pole in subtree
+        if _has_usable_device_evidence(pole, snapshot, DEFAULT_LIVE_FRESHNESS)
+    )
+    assigned_dark = set(assigned_dark_ids)
+    dark = tuple(
+        pole
+        for pole in observable
+        if pole.state == PoleStatus.DARK and pole.pole_id in assigned_dark
+    )
+    contradictions = tuple(
+        sorted(
+            pole.pole_id
+            for pole in observable
+            if pole.state == PoleStatus.LIVE
+            and pole.state_received_at is not None
+            and pole.state_received_at > onset_at
+        )
+    )
+    pre_onset_live = tuple(
+        sorted(
+            pole.pole_id
+            for pole in observable
+            if pole.state == PoleStatus.LIVE
+            and pole.state_received_at is not None
+            and pole.state_received_at <= onset_at
+        )
+    )
+    unusable_ids = tuple(
+        sorted(
+            {
+                *corridor.skipped_pole_ids,
+                *(
+                    pole.pole_id
+                    for pole in subtree
+                    if not _has_usable_device_evidence(pole, snapshot, DEFAULT_LIVE_FRESHNESS)
+                ),
+            }
+        )
+    )
+    spread = _dark_observation_spread(dark)
+    components = replace(
+        _confidence_components(observable, dark, contradictions, spread),
+        boundary_clarity=15,
+    )
+    score = min(79, max(0, sum(components.as_dict().values())))
+    affected_ids = tuple(sorted(pole.pole_id for pole in dark))
+    negative_reasons = (
+        "unusable state evidence prevents an exact surveyed-span claim: "
+        + ", ".join(corridor.skipped_pole_ids),
+    )
+    if contradictions:
+        negative_reasons += (
+            "post-onset LIVE contradictions below corridor: " + ", ".join(contradictions),
+        )
+    return FaultCandidate(
+        dt_id=snapshot.dt_id,
+        feeder_id=snapshot.feeder_id,
+        affected_dt_ids=(snapshot.dt_id,),
+        topology_version=snapshot.topology_version,
+        analysis_at=snapshot.analysis_at,
+        classification=FaultClass.SPAN_FAULT,
+        suspected_asset_type=SuspectedAssetType.SPAN,
+        suspected_asset_id=(f"{corridor.upstream_pole_id}..{corridor.downstream_pole_id}"),
+        parent_pole_id=corridor.upstream_pole_id,
+        child_pole_id=corridor.downstream_pole_id,
+        affected_pole_ids=affected_ids,
+        precision=LocalizationPrecision.CORRIDOR,
+        topology_source=TopologySource.SURVEYED,
+        latitude=(upstream.latitude + downstream.latitude) / 2,
+        longitude=(upstream.longitude + downstream.longitude) / 2,
+        pin_code=downstream.pin_code or upstream.pin_code,
+        confidence_score=score,
+        confidence_level="MEDIUM" if score >= 50 else "LOW",
+        confidence_reason=(
+            f"Surveyed corridor from {corridor.upstream_pole_id} LIVE to "
+            f"{corridor.downstream_pole_id} DARK; exact boundary is hidden by "
+            f"{len(corridor.skipped_pole_ids)} unusable pole observation(s)."
+        ),
+        evidence=CandidateEvidence(
+            onset_at=onset_at,
+            subtree_pole_ids=subtree_ids,
+            observable_pole_count=len(observable),
+            dark_pole_count=len(dark),
+            post_onset_live_contradictions=contradictions,
+            pre_onset_live_observations=pre_onset_live,
+            dark_observation_spread_seconds=spread,
+            positive_reasons=(
+                f"credible LIVE upper bound at {corridor.upstream_pole_id}",
+                f"credible DARK lower bound at {corridor.downstream_pole_id}",
+                f"{len(dark)} usable downstream DARK observation(s)",
+            ),
+            negative_reasons=negative_reasons,
+            components=components,
+            unusable_pole_ids=unusable_ids,
+            corridor=corridor,
+        ),
+    )
+
+
+def _build_degraded_dt_candidate(
+    snapshot: NetworkSnapshot,
+    poles: dict[str, PoleEvidence],
+    dark_ids: tuple[str, ...],
+    freshness: timedelta,
+) -> FaultCandidate:
+    dark = tuple(poles[pole_id] for pole_id in dark_ids)
+    onset_at = min(pole.state_received_at for pole in dark if pole.state_received_at is not None)
+    observable = tuple(
+        pole
+        for pole in sorted(poles.values(), key=lambda item: item.pole_id)
+        if _has_usable_device_evidence(pole, snapshot, freshness)
+    )
+    unusable_ids = tuple(
+        pole.pole_id
+        for pole in sorted(poles.values(), key=lambda item: item.pole_id)
+        if not _has_usable_device_evidence(pole, snapshot, freshness)
+    )
+    spread = _dark_observation_spread(dark)
+    components = replace(
+        _confidence_components(observable, dark, (), spread),
+        boundary_clarity=0,
+    )
+    score = min(49, max(0, sum(components.as_dict().values())))
+    return FaultCandidate(
+        dt_id=snapshot.dt_id,
+        feeder_id=snapshot.feeder_id,
+        affected_dt_ids=(snapshot.dt_id,),
+        topology_version=snapshot.topology_version,
+        analysis_at=snapshot.analysis_at,
+        classification=FaultClass.UNCONFIRMED_OUTAGE,
+        suspected_asset_type=SuspectedAssetType.DISTRIBUTION_TRANSFORMER,
+        suspected_asset_id=snapshot.dt_id,
+        parent_pole_id=None,
+        child_pole_id=None,
+        affected_pole_ids=dark_ids,
+        precision=LocalizationPrecision.DT_LEVEL,
+        topology_source=TopologySource.SURVEYED,
+        latitude=snapshot.dt_latitude,
+        longitude=snapshot.dt_longitude,
+        pin_code=snapshot.dt_pin_code,
+        confidence_score=score,
+        confidence_level="LOW",
+        confidence_reason=(
+            f"{len(dark)} credible DARK pole(s) exist, but missing or unhealthy evidence "
+            "prevents a defensible live-to-dark corridor bound."
+        ),
+        evidence=CandidateEvidence(
+            onset_at=onset_at,
+            subtree_pole_ids=tuple(sorted(poles)),
+            observable_pole_count=len(observable),
+            dark_pole_count=len(dark),
+            post_onset_live_contradictions=(),
+            pre_onset_live_observations=(),
+            dark_observation_spread_seconds=spread,
+            positive_reasons=(
+                f"{len(dark)} usable DARK observation(s) confirm an outage inside {snapshot.dt_id}",
+            ),
+            negative_reasons=(
+                "no unique credible upstream LIVE bound exists",
+                "precision degraded to transformer level instead of inventing a span",
+            ),
+            components=components,
+            unusable_pole_ids=unusable_ids,
         ),
     )
 

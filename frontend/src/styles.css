@@ -719,6 +719,30 @@ button:disabled {
   background: var(--green-2);
 }
 
+.precision-notice {
+  display: grid;
+  gap: 0.28rem;
+  margin: 0 1rem 1rem;
+  padding: 0.8rem;
+  border: 1px solid #dfbd7f;
+  border-left: 4px solid #d98220;
+  color: #694515;
+  background: #fff3de;
+  font-size: 0.7rem;
+  line-height: 1.42;
+}
+
+.precision-notice small {
+  color: #836331;
+}
+
+.precision-notice.dt-level {
+  border-color: #c9b7dd;
+  border-left-color: #71519b;
+  color: #50366f;
+  background: #f2ebf8;
+}
+
 .evidence-section,
 .workflow-section {
   padding: 1rem;

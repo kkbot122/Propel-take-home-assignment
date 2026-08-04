@@ -101,6 +101,30 @@ const secondIncident: Incident = {
   ticket_id: 'ticket-2',
 }
 
+const corridorIncident: Incident = {
+  ...incident,
+  incident_id: 'incident-corridor',
+  fingerprint: 'corridor:DT-001:P-001..P-003',
+  suspected_asset_id: 'P-001..P-003',
+  affected_pole_count: 2,
+  affected_pole_ids: ['P-003', 'P-004'],
+  precision: 'CORRIDOR',
+  confidence_score: 74,
+  confidence_reason: 'Exact boundary is hidden by one unusable pole observation.',
+  evidence: {
+    candidate: {
+      positive_reasons: ['credible LIVE upper bound at P-001'],
+      negative_reasons: ['unusable state evidence prevents an exact surveyed-span claim: P-002'],
+      corridor: {
+        upstream_pole_id: 'P-001',
+        downstream_pole_id: 'P-003',
+        ordered_pole_ids: ['P-001', 'P-002', 'P-003'],
+        skipped_pole_ids: ['P-002'],
+      },
+    },
+  },
+}
+
 const ticket: Ticket = {
   ticket_id: 'ticket-1',
   incident_id: 'incident-1',
@@ -183,6 +207,7 @@ function installFetchRouter(options?: {
   incidents?: Incident[]
   suppressedIncidents?: Incident[]
   unhealthy?: boolean
+  ticket?: Ticket
 }) {
   const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
@@ -197,8 +222,11 @@ function installFetchRouter(options?: {
     }
     if (url === '/api/incidents/incident-1') return jsonResponse(incident)
     if (url === '/api/incidents/incident-2') return jsonResponse(secondIncident)
+    if (url === '/api/incidents/incident-corridor') return jsonResponse(corridorIncident)
     if (url === '/api/incidents/incident-suppressed') return jsonResponse(suppressedIncident)
-    if (url === '/api/tickets/ticket-1' && init?.method !== 'POST') return jsonResponse(ticket)
+    if (url === '/api/tickets/ticket-1' && init?.method !== 'POST') {
+      return jsonResponse(options?.ticket ?? ticket)
+    }
     if (url === '/api/tickets/ticket-2' && init?.method !== 'POST') {
       return jsonResponse({ ...ticket, ticket_id: 'ticket-2', incident_id: 'incident-2' })
     }
@@ -224,6 +252,22 @@ function installFetchRouter(options?: {
     if (url === '/api/network/topology/DT-001') return jsonResponse(topology)
     if (url === '/api/network/topology/DT-002') {
       return jsonResponse({ ...topology, dt_id: 'DT-002', spans: [] })
+    }
+    if (url === '/api/simulator/faults/fault-1/repair') {
+      return jsonResponse({
+        fault_id: 'fault-1',
+        fault_type: 'SPAN_FAULT',
+        feeder_id: 'FDR-001',
+        dt_id: 'DT-001',
+        parent_pole_id: 'P-001',
+        child_pole_id: 'P-002',
+        status: 'REPAIRED',
+        deenergized_pole_ids: ['P-002', 'P-003', 'P-004'],
+        injected_at: '2026-08-04T01:00:00Z',
+        injection_telemetry_at: '2026-08-04T01:00:00Z',
+        repaired_at: '2026-08-04T01:03:00Z',
+        emitted_event_ids: ['event-repair'],
+      })
     }
     if (url === '/api/simulator/faults') {
       const payload = JSON.parse(String(init?.body)) as {
@@ -333,6 +377,7 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'No incident selected' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inject span fault A' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Inject span fault B' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Inject corridor fault' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Inject DT fault' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Inject feeder fault' })).toBeEnabled()
     expect(screen.getByText(/Last refresh/)).toBeInTheDocument()
@@ -364,6 +409,77 @@ describe('App', () => {
         method: 'POST',
         body: JSON.stringify({ fault_type: 'FEEDER_FAULT', feeder_id: 'FDR-001' }),
       }),
+    )
+  })
+
+  it('requests missing-device noise and explains corridor precision', async () => {
+    const fetchMock = installFetchRouter({ incidents: [corridorIncident] })
+    renderApp()
+
+    expect(await screen.findByRole('heading', { name: 'P-001 ⇢ P-003' })).toBeInTheDocument()
+    expect(screen.getAllByText('CORRIDOR')).toHaveLength(2)
+    expect(screen.getByText('Exact span intentionally withheld')).toBeInTheDocument()
+    expect(screen.getByText('Bounded corridor: P-001 → P-002 → P-003')).toBeInTheDocument()
+    expect(screen.getByText('Why Propel chose this corridor')).toBeInTheDocument()
+
+    const injectCorridor = screen.getByRole('button', { name: 'Inject corridor fault' })
+    await waitFor(() => expect(injectCorridor).toBeEnabled())
+    fireEvent.click(injectCorridor)
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/simulator/faults',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            fault_type: 'SPAN_FAULT',
+            dt_id: 'DT-001',
+            parent_pole_id: 'P-001',
+            child_pole_id: 'P-002',
+            missing_device_pole_ids: ['P-002'],
+          }),
+        }),
+      ),
+    )
+  })
+
+  it('maps a corridor incident back to its physical simulator fault for repair', async () => {
+    sessionStorage.setItem(
+      'propel-active-simulator-faults',
+      JSON.stringify([
+        {
+          fault_id: 'fault-1',
+          fault_type: 'SPAN_FAULT',
+          feeder_id: 'FDR-001',
+          dt_id: 'DT-001',
+          parent_pole_id: 'P-001',
+          child_pole_id: 'P-002',
+          status: 'ACTIVE',
+          deenergized_pole_ids: ['P-002', 'P-003', 'P-004'],
+          injected_at: '2026-08-04T01:00:00Z',
+          injection_telemetry_at: '2026-08-04T01:00:00Z',
+          repaired_at: null,
+          emitted_event_ids: ['event-1'],
+        },
+      ]),
+    )
+    const fetchMock = installFetchRouter({
+      incidents: [corridorIncident],
+      ticket: { ...ticket, status: 'RESOLVED', restoration_status: 'REPAIR_NOT_VERIFIED' },
+    })
+    renderApp()
+
+    const repair = await screen.findByRole('button', {
+      name: 'Send selected repair telemetry',
+    })
+    await waitFor(() => expect(repair).toBeEnabled())
+    fireEvent.click(repair)
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/simulator/faults/fault-1/repair',
+        expect.objectContaining({ method: 'POST' }),
+      ),
     )
   })
 

@@ -255,11 +255,12 @@ Not included:
 
 ## Current status
 
-VS-01 through VS-09 and PB-01 through PB-02 are complete. The tested system includes deterministic
+VS-01 through VS-09 and PB-01 through PB-04 are complete. The tested system includes deterministic
 startup, HTTP-to-Redis telemetry, idempotent Redis-to-PostgreSQL processing,
 surveyed-span localization, one-incident grouping, audited ticket workflow,
 telemetry-verified restoration, the operator console, and an isolated
 fresh-volume Playwright acceptance, false-positive suppression, and deterministic
-span/DT/feeder classification. Work now resumes from PB-03 in
-`docs/POST-BACKBONE.md`; simultaneous faults, inferred topology, load
+span/DT/feeder classification. Independent surveyed faults and missing-device
+corridors now preserve separate incidents while degrading precision honestly.
+Work resumes from PB-05 in `docs/POST-BACKBONE.md`; inferred topology, load
 measurement, deployment, and demo packaging remain to be built.
