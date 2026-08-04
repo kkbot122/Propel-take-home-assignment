@@ -729,75 +729,75 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 12.1 Implement precision selection
 
-- [ ] `EXACT_SPAN` only for surveyed topology with a clear boundary.
-- [ ] `PROBABLE_SPAN` for strong inferred topology with a clear boundary.
-- [ ] `CORRIDOR` when multiple adjacent spans are possible.
-- [ ] `DT_LEVEL` when only transformer-level localization is defensible.
-- [ ] `FEEDER_LEVEL` for feeder failures.
-- [ ] Test: precision never overstates the available topology.
+- [x] `EXACT_SPAN` only for surveyed topology with a clear boundary.
+- [x] `PROBABLE_SPAN` for strong inferred topology with a clear boundary.
+- [x] `CORRIDOR` when multiple adjacent spans are possible.
+- [x] `DT_LEVEL` when only transformer-level localization is defensible.
+- [x] `FEEDER_LEVEL` for feeder failures.
+- [x] Test: precision never overstates the available topology.
 
 ## 12.2 Implement topology-quality scoring
 
-- [ ] Surveyed topology receives full topology points.
-- [ ] Inferred topology uses edge and DT topology quality.
-- [ ] Unknown or unusable topology receives minimal points.
-- [ ] Test: surveyed and inferred versions of the same event produce different topology scores.
+- [x] Surveyed topology receives full topology points.
+- [x] Inferred topology uses edge and DT topology quality.
+- [x] Unknown or unusable topology receives minimal points.
+- [x] Test: surveyed and inferred versions of the same event produce different topology scores.
 
 ## 12.3 Implement boundary-clarity scoring
 
-- [ ] Reward recent live parent evidence establishing the upstream side of the boundary.
-- [ ] Reward explicit dark child evidence.
-- [ ] Reduce score when the boundary contains unknown or no-device poles.
-- [ ] Test: direct boundary scores higher than a three-pole corridor.
+- [x] Reward recent live parent evidence establishing the upstream side of the boundary.
+- [x] Reward explicit dark child evidence.
+- [x] Reduce score when the boundary contains unknown or no-device poles.
+- [x] Test: direct boundary scores higher than a three-pole corridor.
 
 ## 12.4 Implement downstream-corroboration scoring
 
-- [ ] Count eligible observable descendants.
-- [ ] Exclude `NO_DEVICE`.
-- [ ] Treat known offline and firmware 1.2 devices as weak or unavailable evidence.
-- [ ] Calculate confirmed-dark ratio.
-- [ ] Test: eight dark out of ten eligible descendants scores higher than three out of ten.
+- [x] Count eligible observable descendants.
+- [x] Exclude `NO_DEVICE`.
+- [x] Treat known offline and firmware 1.2 devices as weak or unavailable evidence.
+- [x] Calculate confirmed-dark ratio.
+- [x] Test: eight dark out of ten eligible descendants scores higher than three out of ten.
 
 ## 12.5 Implement temporal-coherence scoring
 
-- [ ] Use server receive time across devices.
-- [ ] Reward tightly grouped loss events.
-- [ ] Reduce score for scattered events.
-- [ ] Test: a 20-second event cluster scores higher than a 10-minute cluster.
+- [x] Use server receive time across devices.
+- [x] Reward tightly grouped loss events.
+- [x] Reduce score for scattered events.
+- [x] Test: a 20-second event cluster scores higher than a 10-minute cluster.
 
 ## 12.6 Implement sensor-quality scoring
 
-- [ ] Use recent heartbeat status.
-- [ ] Use RSSI.
-- [ ] Use battery voltage.
-- [ ] Use firmware capability.
-- [ ] Use sensor coverage.
-- [ ] Test: healthy, well-covered telemetry scores higher than stale low-RSSI telemetry.
+- [x] Use recent heartbeat status.
+- [x] Use RSSI.
+- [x] Use battery voltage.
+- [x] Use firmware capability.
+- [x] Use sensor coverage.
+- [x] Test: healthy, well-covered telemetry scores higher than stale low-RSSI telemetry.
 
 ## 12.7 Implement scheduled-outage consistency scoring
 
-- [ ] Reward absence of overlapping planned work.
-- [ ] Reduce or cap fault confidence on an exact schedule match.
-- [ ] Preserve an explanation of the schedule evidence.
-- [ ] Test: identical telemetry scores lower during a matching outage window.
+- [x] Leave fault evidence unpenalized when no planned work overlaps.
+- [x] Reclassify an exact schedule match and score the resulting scheduled-outage evidence.
+- [x] Preserve an explanation of the schedule evidence.
+- [x] Test: identical telemetry produces a deterministic, explained scheduled result in-window.
 
 ## 12.8 Implement contradiction penalties and caps
 
-- [ ] Penalize only live descendants observed after candidate onset below a span candidate.
-- [ ] Do not treat a pre-onset heartbeat as a live contradiction.
-- [ ] Penalize stale events attempting to change state.
-- [ ] Penalize large uninstrumented gaps.
-- [ ] Cap confidence when topology is weak.
-- [ ] Test each penalty independently.
+- [x] Penalize only live descendants observed after candidate onset below a span candidate.
+- [x] Do not treat a pre-onset heartbeat as a live contradiction.
+- [x] Reject stale events before scoring so they cannot mutate incident evidence.
+- [x] Penalize large uninstrumented gaps.
+- [x] Cap confidence when topology is weak.
+- [x] Test each penalty independently.
 
 ## 12.9 Return explainable confidence
 
-- [ ] Return score from 0 to 100.
-- [ ] Return `HIGH`, `MEDIUM`, or `LOW`.
-- [ ] Return component scores.
-- [ ] Return positive and negative evidence.
-- [ ] Document that the score is an evidence score, not a trained probability.
-- [ ] Test: the same snapshot always produces the same score and reasons.
+- [x] Return score from 0 to 100.
+- [x] Return `HIGH`, `MEDIUM`, or `LOW`.
+- [x] Return component scores.
+- [x] Return positive and negative evidence.
+- [x] Document that the score is an evidence score, not a trained probability.
+- [x] Test: the same snapshot always produces the same score and reasons.
 
 ---
 

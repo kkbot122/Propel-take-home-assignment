@@ -404,6 +404,22 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
     assert incident.suspected_asset_id == "P-001->P-002"
     assert incident.affected_pole_ids == ("P-002", "P-003", "P-004")
     assert incident.ticket_id is not None
+    persisted_score = incident.evidence["candidate"]
+    assert persisted_score["score_kind"] == "EVIDENCE_SCORE"
+    assert persisted_score["score_policy_version"] == "evidence-score-v1"
+    assert persisted_score["raw_score"] == 100
+    assert persisted_score["score_cap"] == 100
+    assert persisted_score["components"] == {
+        "topology_provenance": 25,
+        "boundary_evidence": 30,
+        "downstream_corroboration": 25,
+        "temporal_coherence": 10,
+        "sensor_quality": 10,
+    }
+    assert persisted_score["penalties"] == {
+        "post_onset_live_contradictions": 0,
+        "missing_or_unhealthy_evidence": 0,
+    }
     analysis_harness.incident_ids.add(incident.incident_id)
 
     concurrent_results = await asyncio.gather(

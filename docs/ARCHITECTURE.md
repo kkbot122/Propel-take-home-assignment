@@ -252,19 +252,26 @@ affected set. A descendant `LIVE` observation is contradictory only when it was
 received after the boundary-child onset. An older live heartbeat remains
 prior-state evidence.
 
-The initial evidence score is versioned, deterministic, and bounded from 0–100:
+The `evidence-score-v1` policy is deterministic and bounded from 0–100:
 
 * surveyed topology: 25 points;
 * clear live-to-dark boundary: 30 points;
 * downstream dark corroboration: up to 25 points;
 * temporal coherence: up to 10 points;
 * healthy power-loss-capable sensor coverage: up to 10 points;
-* post-onset live contradictions: minus 20 points each, capped at minus 40.
+* post-onset live contradictions: minus 20 points each, capped at minus 40;
+* missing or unhealthy observations in the evidence scope: minus 5 points each,
+  capped at minus 20.
 
-This score is not a probability. Each candidate includes component scores,
-positive and negative reasons, the structural subtree, observation spread,
-midpoint coordinates, PIN code, and topology provenance. Candidate persistence
-and active-incident deduplication belong to the incident service in VS-06.
+Boundary points are class-specific: a surveyed span uses its direct live-to-dark
+boundary, a DT result uses transformer-root evidence, a feeder result uses
+correlated DT-wide losses, a sensor anomaly uses the physically inconsistent
+isolated report, and scheduled work uses the matching planned scope. This score
+is not a probability. Each candidate includes its policy version, raw score,
+applied caps, component values, penalties, positive and negative reasons,
+structural subtree, observation spread, midpoint coordinates, PIN code, and
+topology provenance. Candidate persistence and active-incident deduplication
+belong to the incident service in VS-06.
 
 ### 6.7 Incident and Ticket Service
 
@@ -652,7 +659,7 @@ The incident retains the evidence used at detection time so later state changes 
 
 ## 12. Confidence model
 
-Confidence is deterministic and explainable. It combines:
+Confidence is a deterministic, explainable evidence score. It combines:
 
 * Topology provenance: surveyed, inferred, or unavailable
 * Number and proportion of corroborating poles
@@ -670,9 +677,34 @@ Suggested presentation:
 * `MEDIUM` — adequate but incomplete or partly inferred evidence
 * `LOW` — weak, sparse, or materially contradictory evidence
 
-The API should return both a normalized score and a list of reasons. The UI should emphasize the level and plain-language reason rather than only a percentage.
+The API returns the 0–100 evidence score, `HIGH`/`MEDIUM`/`LOW` level, policy
+version, raw score, applied caps, named components, penalties, and stable reason
+lists. The UI calls it an evidence score and emphasizes the level and
+plain-language reasons. Neither surface presents it as a probability or percent
+likelihood.
 
-Confidence and precision remain independent: the system can be highly confident that a DT failed while only reporting `DT_LEVEL` precision. Initial score bands are `HIGH >= 80`, `MEDIUM 50–79`, and `LOW < 50`. A missing-evidence corridor is capped at 79 and an unbounded degraded DT result at 49. An inferred span is capped below `HIGH`; a corridor may still have strong evidence that an outage exists, but cannot be relabelled as an exact span.
+Confidence and precision remain independent: the system can be highly confident
+that a DT failed while only reporting `DT_LEVEL` precision. Score bands are
+`HIGH >= 80`, `MEDIUM 50–79`, and `LOW < 50`. `PROBABLE_SPAN` and `CORRIDOR`
+results are capped at 79. An unbounded `UNCONFIRMED_OUTAGE` at `DT_LEVEL` is
+capped at 49, while a rule-confirmed `DT_FAULT` at the same precision is not.
+Any other unconfirmed result is also capped at 49. Caps limit the score without
+changing classification or precision.
+
+Sensor quality uses evidence coverage plus device health, power-loss capability,
+freshness, firmware capability, RSSI, and battery voltage. A missing or unhealthy
+device lowers sensor quality and adds a missing-evidence penalty; it never enters
+the eligible denominator or confirmed-dark numerator. Pre-onset live telemetry
+is retained as positive prior-state evidence. Only post-onset live descendants
+are contradictions for an outage hypothesis; for `SENSOR_ANOMALY`, that same
+physical inconsistency is positive class evidence rather than a contradiction
+penalty.
+
+The fixed PB-06 calibration results are retained in
+[`PB06-CALIBRATION.json`](PB06-CALIBRATION.json). These values are initial,
+explainable policy choices, not accuracy or probability measurements. Changing
+them requires a new policy version and updated fixed-scenario results so older
+incidents remain interpretable.
 
 ### 12.1 Initial deterministic rule defaults
 

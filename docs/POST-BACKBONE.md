@@ -27,7 +27,7 @@ Optimize in this order:
 - [x] PB-03 — Multiple simultaneous surveyed faults
 - [x] PB-04 — Missing-device corridors and degraded precision
 - [x] PB-05 — Unknown-topology inference and localization
-- [ ] PB-06 — Confidence scoring and evidence calibration
+- [x] PB-06 — Confidence scoring and evidence calibration
 - [ ] PB-07 — Realistic multi-feeder network and telemetry generator
 - [ ] PB-08 — Batch ingestion, reliability, and measured performance
 - [ ] PB-09 — Operator diagnostics and deployment hardening
@@ -312,32 +312,34 @@ class and precision level. The score is not a probability.
 
 ### Implementation
 
-- [ ] Define named score components for topology provenance, boundary evidence,
+- [x] Define named score components for topology provenance, boundary evidence,
       downstream corroboration, temporal coherence, and sensor quality.
-- [ ] Define contradiction and missing-evidence penalties.
-- [ ] Apply hard maximum scores for `PROBABLE_SPAN`, `CORRIDOR`, and `DT_LEVEL`.
-- [ ] Define class-specific components for span, DT, feeder, anomaly, schedule,
+- [x] Define contradiction and missing-evidence penalties.
+- [x] Apply hard maximum scores for `PROBABLE_SPAN`, `CORRIDOR`, and unbounded
+      `DT_LEVEL` results while allowing rule-confirmed `DT_FAULT` evidence to score HIGH.
+- [x] Define class-specific components for span, DT, feeder, anomaly, schedule,
       and unconfirmed results.
-- [ ] Keep pre-onset live telemetry as positive prior-state evidence.
-- [ ] Keep post-onset live descendants as contradictions where applicable.
-- [ ] Return component values, caps, penalties, positive reasons, and negative reasons.
-- [ ] Produce stable plain-language explanations without an LLM dependency.
-- [ ] Calibrate thresholds on fixed simulator seeds and retain raw results.
-- [ ] Version the scoring policy so historical incidents remain interpretable.
+- [x] Keep pre-onset live telemetry as positive prior-state evidence.
+- [x] Keep post-onset live descendants as contradictions where applicable.
+- [x] Return component values, caps, penalties, positive reasons, and negative reasons.
+- [x] Produce stable plain-language explanations without an LLM dependency.
+- [x] Calibrate thresholds on fixed simulator seeds and retain raw results in
+      [`PB06-CALIBRATION.json`](PB06-CALIBRATION.json).
+- [x] Version the scoring policy so historical incidents remain interpretable.
 
 ### Required tests
 
-- [ ] Surveyed exact evidence scores higher than equivalent inferred evidence.
-- [ ] Hard precision caps cannot be bypassed by strong downstream counts.
-- [ ] Contradictions reduce the correct component deterministically.
-- [ ] Missing or unhealthy devices reduce evidence without becoming dark votes.
-- [ ] Reordering identical evidence does not change components or reasons.
-- [ ] Scores remain within documented bounds.
-- [ ] API and UI call the value an evidence score, never a probability.
+- [x] Surveyed exact evidence scores higher than equivalent inferred evidence.
+- [x] Hard precision caps cannot be bypassed by strong downstream counts.
+- [x] Contradictions reduce the correct component deterministically.
+- [x] Missing or unhealthy devices reduce evidence without becoming dark votes.
+- [x] Reordering identical evidence does not change components or reasons.
+- [x] Scores remain within documented bounds.
+- [x] API and UI call the value an evidence score, never a probability.
 
 ### Exit condition
 
-- [ ] Every actionable or suppressed result explains its score, caps, positive
+- [x] Every actionable or suppressed result explains its score, caps, positive
       evidence, and contradictions in stable operator language.
 
 ---

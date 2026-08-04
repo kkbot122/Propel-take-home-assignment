@@ -2,10 +2,16 @@ from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import timedelta
 
+from propel.analysis.confidence import (
+    EVIDENCE_SCORE_POLICY_VERSION,
+    EvidenceScore,
+    EvidenceScoreInput,
+    penalty_reasons,
+    score_evidence,
+)
 from propel.analysis.models import (
     CandidateEvidence,
     CandidateSuppression,
-    ConfidenceComponents,
     FaultCandidate,
     FeederTransformerEvidence,
     LocalizationCorridor,
@@ -233,6 +239,7 @@ def _build_span_candidates(
                 poles,
                 subtree_ids,
                 assigned_ids,
+                live_freshness,
             )
             if boundary.corridor is None
             else _build_corridor_candidate(
@@ -241,6 +248,7 @@ def _build_span_candidates(
                 poles,
                 subtree_ids,
                 assigned_ids,
+                live_freshness,
             )
         )
         candidates.append(
@@ -388,19 +396,44 @@ def _build_dt_candidate(
         )
     )
     spread = _dark_observation_spread(dark)
-    base_components = _confidence_components(observable, dark, contradictions, spread)
-    components = replace(base_components, boundary_clarity=20)
-    score = max(0, min(100, sum(components.as_dict().values())))
+    evidence_poles = tuple(sorted(transformer.poles, key=lambda pole: pole.pole_id))
+    unusable_ids = tuple(
+        pole.pole_id
+        for pole in evidence_poles
+        if not _has_usable_device_evidence(pole, snapshot, live_freshness)
+    )
+    topology_source = topology_spans[0].source if topology_spans else TopologySource.SURVEYED
+    evidence_score = score_evidence(
+        EvidenceScoreInput(
+            classification=FaultClass.DT_FAULT,
+            precision=LocalizationPrecision.DT_LEVEL,
+            topology_source=topology_source,
+            topology_quality_score=_topology_quality_for_source(snapshot, topology_source),
+            boundary_evidence=20,
+            corroborating_count=len(dark),
+            eligible_count=len(observable),
+            temporal_spread_seconds=spread,
+            evidence_poles=evidence_poles,
+            analysis_at=snapshot.analysis_at,
+            freshness=live_freshness,
+            contradiction_count=len(contradictions),
+        )
+    )
     affected_ids = tuple(sorted(pole.pole_id for pole in dark))
     positive_reasons = (
         f"{len(dark)}/{len(observable)} recently healthy observable poles are DARK",
         f"dark evidence covers {len(affected_branches)} rooted topology branches",
         "no lower live-to-dark span boundary explains loss of the transformer root",
     )
-    negative_reasons = (
+    negative_reasons: tuple[str, ...] = (
         ("post-onset LIVE poles inside transformer scope: " + ", ".join(contradictions),)
         if contradictions
         else ()
+    )
+    negative_reasons += penalty_reasons(
+        evidence_score,
+        contradiction_ids=contradictions,
+        unusable_ids=unusable_ids,
     )
     return FaultCandidate(
         dt_id=transformer.dt_id,
@@ -415,12 +448,12 @@ def _build_dt_candidate(
         child_pole_id=None,
         affected_pole_ids=affected_ids,
         precision=LocalizationPrecision.DT_LEVEL,
-        topology_source=(topology_spans[0].source if topology_spans else TopologySource.SURVEYED),
+        topology_source=topology_source,
         latitude=transformer.latitude,
         longitude=transformer.longitude,
         pin_code=transformer.pin_code,
-        confidence_score=score,
-        confidence_level="HIGH" if score >= 80 else "MEDIUM" if score >= 50 else "LOW",
+        confidence_score=evidence_score.score,
+        confidence_level=evidence_score.level,
         confidence_reason=(
             f"Transformer-wide loss with {len(dark)}/{len(observable)} observable poles DARK "
             f"across {len(affected_branches)} root branches."
@@ -435,7 +468,12 @@ def _build_dt_candidate(
             dark_observation_spread_seconds=spread,
             positive_reasons=positive_reasons,
             negative_reasons=negative_reasons,
-            components=components,
+            components=evidence_score.components,
+            unusable_pole_ids=unusable_ids,
+            score_policy_version=EVIDENCE_SCORE_POLICY_VERSION,
+            raw_score=evidence_score.raw_score,
+            score_cap=evidence_score.score_cap,
+            caps=evidence_score.caps,
         ),
     )
 
@@ -476,15 +514,38 @@ def _build_feeder_candidate(
     )
     observable_count = sum(candidate.evidence.observable_pole_count for candidate in dt_candidates)
     dark_count = sum(candidate.evidence.dark_pole_count for candidate in dt_candidates)
-    components = ConfidenceComponents(
-        topology=25,
-        boundary_clarity=20 if correlated else 5,
-        downstream_corroboration=round(25 * affected_ratio),
-        temporal_coherence=10 if correlated else 0,
-        sensor_quality=10,
-        contradiction_penalty=0 if correlated else -20,
+    topology_source = (
+        TopologySource.INFERRED
+        if any(candidate.topology_source == TopologySource.INFERRED for candidate in dt_candidates)
+        else TopologySource.SURVEYED
     )
-    score = max(0, min(100, sum(components.as_dict().values())))
+    evidence_poles = tuple(
+        sorted(
+            (pole for transformer in eligible_transformers for pole in transformer.poles),
+            key=lambda pole: pole.pole_id,
+        )
+    )
+    unusable_ids = tuple(
+        pole.pole_id
+        for pole in evidence_poles
+        if not _has_usable_device_evidence(pole, snapshot, live_freshness)
+    )
+    evidence_score = score_evidence(
+        EvidenceScoreInput(
+            classification=classification,
+            precision=LocalizationPrecision.FEEDER_LEVEL,
+            topology_source=topology_source,
+            topology_quality_score=_topology_quality_for_source(snapshot, topology_source),
+            boundary_evidence=25 if correlated else 5,
+            corroborating_count=len(affected_dt_ids),
+            eligible_count=len(eligible_transformers),
+            temporal_spread_seconds=onset_spread,
+            evidence_poles=evidence_poles,
+            analysis_at=snapshot.analysis_at,
+            freshness=live_freshness,
+            contradiction_count=0,
+        )
+    )
     latitude = sum(candidate.latitude for candidate in dt_candidates) / len(dt_candidates)
     longitude = sum(candidate.longitude for candidate in dt_candidates) / len(dt_candidates)
     pin_codes = tuple(
@@ -511,18 +572,12 @@ def _build_feeder_candidate(
         child_pole_id=None,
         affected_pole_ids=affected_pole_ids,
         precision=LocalizationPrecision.FEEDER_LEVEL,
-        topology_source=(
-            TopologySource.INFERRED
-            if any(
-                candidate.topology_source == TopologySource.INFERRED for candidate in dt_candidates
-            )
-            else TopologySource.SURVEYED
-        ),
+        topology_source=topology_source,
         latitude=latitude,
         longitude=longitude,
         pin_code=pin_codes[0] if len(pin_codes) == 1 else None,
-        confidence_score=score,
-        confidence_level="HIGH" if score >= 80 else "MEDIUM" if score >= 50 else "LOW",
+        confidence_score=evidence_score.score,
+        confidence_level=evidence_score.level,
         confidence_reason=(
             f"{len(affected_dt_ids)}/{len(eligible_transformers)} observable DTs are affected; "
             f"{timing_reason}."
@@ -537,10 +592,18 @@ def _build_feeder_candidate(
             dark_observation_spread_seconds=onset_spread,
             positive_reasons=(
                 f"{len(affected_dt_ids)}/{len(eligible_transformers)} feeder DTs have DT-wide loss",
-                timing_reason,
+                *((timing_reason,) if correlated else ()),
             ),
-            negative_reasons=(() if correlated else (timing_reason,)),
-            components=components,
+            negative_reasons=(
+                *((timing_reason,) if not correlated else ()),
+                *penalty_reasons(evidence_score, unusable_ids=unusable_ids),
+            ),
+            components=evidence_score.components,
+            unusable_pole_ids=unusable_ids,
+            score_policy_version=EVIDENCE_SCORE_POLICY_VERSION,
+            raw_score=evidence_score.raw_score,
+            score_cap=evidence_score.score_cap,
+            caps=evidence_score.caps,
         ),
     )
 
@@ -575,6 +638,16 @@ def _classify_span_candidate(
             f"Pole {child.pole_id} reports DARK while surveyed downstream poles "
             f"{', '.join(credible_live_descendants)} have fresh post-onset LIVE telemetry."
         )
+        evidence_score = _score_existing_candidate(
+            snapshot,
+            candidate,
+            classification=FaultClass.SENSOR_ANOMALY,
+            precision=LocalizationPrecision.POLE_LEVEL,
+            boundary_evidence=30,
+            corroborating_count=len(credible_live_descendants),
+            eligible_count=len(credible_live_descendants),
+            contradiction_count=0,
+        )
         return replace(
             candidate,
             classification=FaultClass.SENSOR_ANOMALY,
@@ -584,14 +657,27 @@ def _classify_span_candidate(
             latitude=child.latitude,
             longitude=child.longitude,
             pin_code=child.pin_code,
+            confidence_score=evidence_score.score,
+            confidence_level=evidence_score.level,
             confidence_reason=reason,
             evidence=replace(
                 candidate.evidence,
-                positive_reasons=candidate.evidence.positive_reasons
-                + (
+                positive_reasons=(
+                    f"explicit isolated DARK report at pole {child.pole_id}",
                     "surveyed dependency makes downstream LIVE telemetry physically "
                     "inconsistent with an upstream power loss",
+                    f"{len(credible_live_descendants)} downstream pole(s) remained "
+                    "LIVE after onset",
                 ),
+                negative_reasons=penalty_reasons(
+                    evidence_score,
+                    unusable_ids=candidate.evidence.unusable_pole_ids,
+                ),
+                components=evidence_score.components,
+                score_policy_version=EVIDENCE_SCORE_POLICY_VERSION,
+                raw_score=evidence_score.raw_score,
+                score_cap=evidence_score.score_cap,
+                caps=evidence_score.caps,
             ),
             suppression=CandidateSuppression(
                 reason=reason,
@@ -621,14 +707,39 @@ def _apply_scheduled_suppression(
         f"for {scheduled_outage.scope.value} {scheduled_outage.scope_id}: "
         f"{scheduled_outage.reason}"
     )
+    evidence_score = _score_existing_candidate(
+        snapshot,
+        candidate,
+        classification=FaultClass.SCHEDULED_OUTAGE,
+        precision=candidate.precision,
+        boundary_evidence=30,
+        corroborating_count=candidate.evidence.dark_pole_count,
+        eligible_count=candidate.evidence.observable_pole_count,
+        contradiction_count=len(candidate.evidence.post_onset_live_contradictions),
+    )
     return replace(
         candidate,
         classification=FaultClass.SCHEDULED_OUTAGE,
+        confidence_score=evidence_score.score,
+        confidence_level=evidence_score.level,
         confidence_reason=reason,
         evidence=replace(
             candidate.evidence,
             positive_reasons=candidate.evidence.positive_reasons
             + (f"scheduled outage {scheduled_outage.outage_id} covers this observation",),
+            negative_reasons=(
+                *_without_calculated_score_reasons(candidate.evidence.negative_reasons),
+                *penalty_reasons(
+                    evidence_score,
+                    contradiction_ids=candidate.evidence.post_onset_live_contradictions,
+                    unusable_ids=candidate.evidence.unusable_pole_ids,
+                ),
+            ),
+            components=evidence_score.components,
+            score_policy_version=EVIDENCE_SCORE_POLICY_VERSION,
+            raw_score=evidence_score.raw_score,
+            score_cap=evidence_score.score_cap,
+            caps=evidence_score.caps,
         ),
         suppression=CandidateSuppression(
             reason=reason,
@@ -674,6 +785,61 @@ def _matching_scheduled_outage(
         iter(sorted(matches, key=lambda outage: (scope_priority[outage.scope], outage.outage_id))),
         None,
     )
+
+
+def _score_existing_candidate(
+    snapshot: NetworkSnapshot,
+    candidate: FaultCandidate,
+    *,
+    classification: FaultClass,
+    precision: LocalizationPrecision,
+    boundary_evidence: int,
+    corroborating_count: int,
+    eligible_count: int,
+    contradiction_count: int,
+) -> EvidenceScore:
+    all_poles = {
+        pole.pole_id: pole
+        for transformer in _snapshot_transformers(snapshot)
+        for pole in transformer.poles
+    }
+    scope_ids = tuple(
+        sorted(
+            {
+                *candidate.evidence.subtree_pole_ids,
+                *candidate.evidence.unusable_pole_ids,
+            }
+        )
+    )
+    evidence_poles = tuple(all_poles[pole_id] for pole_id in scope_ids if pole_id in all_poles)
+    return score_evidence(
+        EvidenceScoreInput(
+            classification=classification,
+            precision=precision,
+            topology_source=candidate.topology_source,
+            topology_quality_score=_topology_quality_for_source(
+                snapshot, candidate.topology_source
+            ),
+            boundary_evidence=boundary_evidence,
+            corroborating_count=corroborating_count,
+            eligible_count=eligible_count,
+            temporal_spread_seconds=candidate.evidence.dark_observation_spread_seconds,
+            evidence_poles=evidence_poles,
+            analysis_at=snapshot.analysis_at,
+            freshness=DEFAULT_LIVE_FRESHNESS,
+            contradiction_count=contradiction_count,
+            additional_missing_count=sum(pole_id not in all_poles for pole_id in scope_ids),
+        )
+    )
+
+
+def _without_calculated_score_reasons(reasons: tuple[str, ...]) -> tuple[str, ...]:
+    calculated_prefixes = (
+        "post-onset LIVE contradictions apply ",
+        "missing or unhealthy device evidence applies ",
+        "evidence score capped at ",
+    )
+    return tuple(reason for reason in reasons if not reason.startswith(calculated_prefixes))
 
 
 def _pole_index(snapshot: NetworkSnapshot) -> dict[str, PoleEvidence]:
@@ -779,6 +945,7 @@ def _build_candidate(
     poles: dict[str, PoleEvidence],
     subtree_ids: tuple[str, ...],
     assigned_dark_ids: tuple[str, ...],
+    live_freshness: timedelta,
 ) -> FaultCandidate:
     assert boundary.parent_pole_id is not None
     parent = poles[boundary.parent_pole_id]
@@ -788,9 +955,7 @@ def _build_candidate(
 
     subtree = tuple(poles[pole_id] for pole_id in subtree_ids)
     observable = tuple(
-        pole
-        for pole in subtree
-        if _has_usable_device_evidence(pole, snapshot, DEFAULT_LIVE_FRESHNESS)
+        pole for pole in subtree if _has_usable_device_evidence(pole, snapshot, live_freshness)
     )
     assigned_dark = set(assigned_dark_ids)
     dark = tuple(
@@ -818,15 +983,33 @@ def _build_candidate(
     )
     affected_ids = tuple(sorted(pole.pole_id for pole in dark))
     spread = _dark_observation_spread(dark)
-    components = _confidence_components(observable, dark, contradictions, spread)
-    if boundary.source == TopologySource.INFERRED:
-        components = replace(
-            components,
-            topology=round(25 * snapshot.topology_quality_score),
-            boundary_clarity=20,
+    evidence_poles = tuple(sorted(subtree, key=lambda pole: pole.pole_id))
+    unusable_ids = tuple(
+        pole.pole_id
+        for pole in evidence_poles
+        if not _has_usable_device_evidence(pole, snapshot, live_freshness)
+    )
+    precision = (
+        LocalizationPrecision.EXACT_SPAN
+        if boundary.source == TopologySource.SURVEYED
+        else LocalizationPrecision.PROBABLE_SPAN
+    )
+    evidence_score = score_evidence(
+        EvidenceScoreInput(
+            classification=FaultClass.SPAN_FAULT,
+            precision=precision,
+            topology_source=boundary.source,
+            topology_quality_score=_topology_quality_for_source(snapshot, boundary.source),
+            boundary_evidence=30 if boundary.source == TopologySource.SURVEYED else 24,
+            corroborating_count=len(dark),
+            eligible_count=len(observable),
+            temporal_spread_seconds=spread,
+            evidence_poles=evidence_poles,
+            analysis_at=snapshot.analysis_at,
+            freshness=live_freshness,
+            contradiction_count=len(contradictions),
         )
-    score_cap = 100 if boundary.source == TopologySource.SURVEYED else 79
-    score = max(0, min(score_cap, sum(components.as_dict().values())))
+    )
     positive_reasons, negative_reasons = _confidence_reasons(
         parent,
         child,
@@ -849,7 +1032,11 @@ def _build_candidate(
             "geographic topology is inferred and cannot support exact-span precision",
             *snapshot.topology_quality_reasons,
         )
-    confidence_level = "HIGH" if score >= 80 else "MEDIUM" if score >= 50 else "LOW"
+    negative_reasons += penalty_reasons(
+        evidence_score,
+        contradiction_ids=contradictions,
+        unusable_ids=unusable_ids,
+    )
     provenance_label = "Surveyed" if boundary.source == TopologySource.SURVEYED else "Inferred"
     confidence_reason = (
         f"{provenance_label} live-to-dark boundary with {len(dark)}/{len(observable)} "
@@ -868,17 +1055,13 @@ def _build_candidate(
         parent_pole_id=parent.pole_id,
         child_pole_id=child.pole_id,
         affected_pole_ids=affected_ids,
-        precision=(
-            LocalizationPrecision.EXACT_SPAN
-            if boundary.source == TopologySource.SURVEYED
-            else LocalizationPrecision.PROBABLE_SPAN
-        ),
+        precision=precision,
         topology_source=boundary.source,
         latitude=(parent.latitude + child.latitude) / 2,
         longitude=(parent.longitude + child.longitude) / 2,
         pin_code=child.pin_code or parent.pin_code,
-        confidence_score=score,
-        confidence_level=confidence_level,
+        confidence_score=evidence_score.score,
+        confidence_level=evidence_score.level,
         confidence_reason=confidence_reason,
         evidence=CandidateEvidence(
             onset_at=onset_at,
@@ -890,10 +1073,15 @@ def _build_candidate(
             dark_observation_spread_seconds=spread,
             positive_reasons=positive_reasons,
             negative_reasons=negative_reasons,
-            components=components,
+            components=evidence_score.components,
+            unusable_pole_ids=unusable_ids,
             topology_quality_score=snapshot.topology_quality_score,
             topology_quality_tier=snapshot.topology_quality_tier,
             topology_quality_reasons=snapshot.topology_quality_reasons,
+            score_policy_version=EVIDENCE_SCORE_POLICY_VERSION,
+            raw_score=evidence_score.raw_score,
+            score_cap=evidence_score.score_cap,
+            caps=evidence_score.caps,
         ),
     )
 
@@ -904,6 +1092,7 @@ def _build_corridor_candidate(
     poles: dict[str, PoleEvidence],
     subtree_ids: tuple[str, ...],
     assigned_dark_ids: tuple[str, ...],
+    live_freshness: timedelta,
 ) -> FaultCandidate:
     upstream = poles[corridor.upstream_pole_id]
     downstream = poles[corridor.downstream_pole_id]
@@ -911,9 +1100,7 @@ def _build_corridor_candidate(
     onset_at = downstream.state_received_at
     subtree = tuple(poles[pole_id] for pole_id in subtree_ids)
     observable = tuple(
-        pole
-        for pole in subtree
-        if _has_usable_device_evidence(pole, snapshot, DEFAULT_LIVE_FRESHNESS)
+        pole for pole in subtree if _has_usable_device_evidence(pole, snapshot, live_freshness)
     )
     assigned_dark = set(assigned_dark_ids)
     dark = tuple(
@@ -946,19 +1133,32 @@ def _build_corridor_candidate(
                 *(
                     pole.pole_id
                     for pole in subtree
-                    if not _has_usable_device_evidence(pole, snapshot, DEFAULT_LIVE_FRESHNESS)
+                    if not _has_usable_device_evidence(pole, snapshot, live_freshness)
                 ),
             }
         )
     )
     spread = _dark_observation_spread(dark)
     topology_source = _snapshot_topology_source(snapshot)
-    components = replace(
-        _confidence_components(observable, dark, contradictions, spread),
-        topology=round(25 * snapshot.topology_quality_score),
-        boundary_clarity=15,
+    evidence_poles = tuple(
+        poles[pole_id] for pole_id in sorted({*subtree_ids, *corridor.skipped_pole_ids})
     )
-    score = min(79, max(0, sum(components.as_dict().values())))
+    evidence_score = score_evidence(
+        EvidenceScoreInput(
+            classification=FaultClass.SPAN_FAULT,
+            precision=LocalizationPrecision.CORRIDOR,
+            topology_source=topology_source,
+            topology_quality_score=_topology_quality_for_source(snapshot, topology_source),
+            boundary_evidence=15,
+            corroborating_count=len(dark),
+            eligible_count=len(observable),
+            temporal_spread_seconds=spread,
+            evidence_poles=evidence_poles,
+            analysis_at=snapshot.analysis_at,
+            freshness=live_freshness,
+            contradiction_count=len(contradictions),
+        )
+    )
     affected_ids = tuple(sorted(pole.pole_id for pole in dark))
     negative_reasons = (
         "unusable state evidence prevents an exact span claim: "
@@ -970,9 +1170,12 @@ def _build_corridor_candidate(
             *snapshot.topology_quality_reasons,
         )
     if contradictions:
-        negative_reasons += (
-            "post-onset LIVE contradictions below corridor: " + ", ".join(contradictions),
-        )
+        negative_reasons += ("post-onset LIVE descendants contradict the corridor outage",)
+    negative_reasons += penalty_reasons(
+        evidence_score,
+        contradiction_ids=contradictions,
+        unusable_ids=unusable_ids,
+    )
     return FaultCandidate(
         dt_id=snapshot.dt_id,
         feeder_id=snapshot.feeder_id,
@@ -990,8 +1193,8 @@ def _build_corridor_candidate(
         latitude=(upstream.latitude + downstream.latitude) / 2,
         longitude=(upstream.longitude + downstream.longitude) / 2,
         pin_code=downstream.pin_code or upstream.pin_code,
-        confidence_score=score,
-        confidence_level="MEDIUM" if score >= 50 else "LOW",
+        confidence_score=evidence_score.score,
+        confidence_level=evidence_score.level,
         confidence_reason=(
             f"{topology_source.value.title()} corridor from {corridor.upstream_pole_id} LIVE to "
             f"{corridor.downstream_pole_id} DARK; exact boundary is hidden by "
@@ -1011,12 +1214,16 @@ def _build_corridor_candidate(
                 f"{len(dark)} usable downstream DARK observation(s)",
             ),
             negative_reasons=negative_reasons,
-            components=components,
+            components=evidence_score.components,
             unusable_pole_ids=unusable_ids,
             corridor=corridor,
             topology_quality_score=snapshot.topology_quality_score,
             topology_quality_tier=snapshot.topology_quality_tier,
             topology_quality_reasons=snapshot.topology_quality_reasons,
+            score_policy_version=EVIDENCE_SCORE_POLICY_VERSION,
+            raw_score=evidence_score.raw_score,
+            score_cap=evidence_score.score_cap,
+            caps=evidence_score.caps,
         ),
     )
 
@@ -1041,12 +1248,22 @@ def _build_degraded_dt_candidate(
     )
     spread = _dark_observation_spread(dark)
     topology_source = _snapshot_topology_source(snapshot)
-    components = replace(
-        _confidence_components(observable, dark, (), spread),
-        topology=round(25 * snapshot.topology_quality_score),
-        boundary_clarity=0,
+    evidence_poles = tuple(sorted(poles.values(), key=lambda pole: pole.pole_id))
+    evidence_score = score_evidence(
+        EvidenceScoreInput(
+            classification=FaultClass.UNCONFIRMED_OUTAGE,
+            precision=LocalizationPrecision.DT_LEVEL,
+            topology_source=topology_source,
+            topology_quality_score=_topology_quality_for_source(snapshot, topology_source),
+            boundary_evidence=0,
+            corroborating_count=len(dark),
+            eligible_count=len(observable),
+            temporal_spread_seconds=spread,
+            evidence_poles=evidence_poles,
+            analysis_at=snapshot.analysis_at,
+            freshness=freshness,
+        )
     )
-    score = min(49, max(0, sum(components.as_dict().values())))
     return FaultCandidate(
         dt_id=snapshot.dt_id,
         feeder_id=snapshot.feeder_id,
@@ -1064,8 +1281,8 @@ def _build_degraded_dt_candidate(
         latitude=snapshot.dt_latitude,
         longitude=snapshot.dt_longitude,
         pin_code=snapshot.dt_pin_code,
-        confidence_score=score,
-        confidence_level="LOW",
+        confidence_score=evidence_score.score,
+        confidence_level=evidence_score.level,
         confidence_reason=(
             f"{len(dark)} credible DARK pole(s) exist, but missing or unhealthy evidence "
             "prevents a defensible live-to-dark corridor bound."
@@ -1084,12 +1301,17 @@ def _build_degraded_dt_candidate(
             negative_reasons=(
                 "no unique credible upstream LIVE bound exists",
                 "precision degraded to transformer level instead of inventing a span",
+                *penalty_reasons(evidence_score, unusable_ids=unusable_ids),
             ),
-            components=components,
+            components=evidence_score.components,
             unusable_pole_ids=unusable_ids,
             topology_quality_score=snapshot.topology_quality_score,
             topology_quality_tier=snapshot.topology_quality_tier,
             topology_quality_reasons=snapshot.topology_quality_reasons,
+            score_policy_version=EVIDENCE_SCORE_POLICY_VERSION,
+            raw_score=evidence_score.raw_score,
+            score_cap=evidence_score.score_cap,
+            caps=evidence_score.caps,
         ),
     )
 
@@ -1103,6 +1325,13 @@ def _snapshot_topology_source(snapshot: NetworkSnapshot) -> TopologySource:
     return TopologySource.SURVEYED
 
 
+def _topology_quality_for_source(
+    snapshot: NetworkSnapshot,
+    source: TopologySource,
+) -> float:
+    return 1.0 if source == TopologySource.SURVEYED else snapshot.topology_quality_score
+
+
 def _dark_observation_spread(dark: tuple[PoleEvidence, ...]) -> float | None:
     timestamps = sorted(
         pole.state_received_at for pole in dark if pole.state_received_at is not None
@@ -1110,40 +1339,6 @@ def _dark_observation_spread(dark: tuple[PoleEvidence, ...]) -> float | None:
     if not timestamps:
         return None
     return (timestamps[-1] - timestamps[0]).total_seconds()
-
-
-def _confidence_components(
-    observable: tuple[PoleEvidence, ...],
-    dark: tuple[PoleEvidence, ...],
-    contradictions: tuple[str, ...],
-    spread: float | None,
-) -> ConfidenceComponents:
-    observable_count = len(observable)
-    corroboration = round(25 * len(dark) / observable_count) if observable_count else 0
-    if spread is None:
-        temporal = 0
-    elif spread <= CORRELATION_WINDOW_SECONDS:
-        temporal = 10
-    elif spread <= 60:
-        temporal = 5
-    else:
-        temporal = 0
-    healthy_capable_count = sum(
-        1
-        for pole in observable
-        if pole.device is not None
-        and pole.device.status == DeviceHealthStatus.HEALTHY
-        and pole.device.can_report_power_loss
-    )
-    sensor_quality = round(10 * healthy_capable_count / observable_count) if observable_count else 0
-    return ConfidenceComponents(
-        topology=25,
-        boundary_clarity=30,
-        downstream_corroboration=corroboration,
-        temporal_coherence=temporal,
-        sensor_quality=sensor_quality,
-        contradiction_penalty=-min(40, len(contradictions) * 20),
-    )
 
 
 def _confidence_reasons(
@@ -1172,17 +1367,6 @@ def _confidence_reasons(
     negative: list[str] = []
     if contradictions:
         negative.append(
-            "post-onset LIVE contradictions below boundary: " + ", ".join(contradictions)
+            "post-onset LIVE descendants contradict the span outage: " + ", ".join(contradictions)
         )
-    weak_devices = sorted(
-        pole.pole_id
-        for pole in observable
-        if pole.device is not None
-        and (
-            pole.device.status != DeviceHealthStatus.HEALTHY
-            or not pole.device.can_report_power_loss
-        )
-    )
-    if weak_devices:
-        negative.append("weak or incapable device evidence: " + ", ".join(weak_devices))
     return tuple(positive), tuple(negative)

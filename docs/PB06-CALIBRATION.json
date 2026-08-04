@@ -1,0 +1,114 @@
+{
+  "policy_version": "evidence-score-v1",
+  "recorded_at": "2026-08-04",
+  "score_interpretation": "Deterministic evidence score; not a probability.",
+  "fixtures": {
+    "surveyed_exact_span": {
+      "classification": "SPAN_FAULT",
+      "precision": "EXACT_SPAN",
+      "raw_score": 100,
+      "score_cap": 100,
+      "evidence_score": 100,
+      "components": {
+        "topology_provenance": 25,
+        "boundary_evidence": 30,
+        "downstream_corroboration": 25,
+        "temporal_coherence": 10,
+        "sensor_quality": 10
+      },
+      "penalties": {
+        "post_onset_live_contradictions": 0,
+        "missing_or_unhealthy_evidence": 0
+      }
+    },
+    "inferred_probable_span": {
+      "classification": "SPAN_FAULT",
+      "precision": "PROBABLE_SPAN",
+      "raw_score": 88,
+      "score_cap": 79,
+      "evidence_score": 79,
+      "components": {
+        "topology_provenance": 19,
+        "boundary_evidence": 24,
+        "downstream_corroboration": 25,
+        "temporal_coherence": 10,
+        "sensor_quality": 10
+      },
+      "penalties": {
+        "post_onset_live_contradictions": 0,
+        "missing_or_unhealthy_evidence": 0
+      }
+    },
+    "missing_device_corridor": {
+      "classification": "SPAN_FAULT",
+      "precision": "CORRIDOR",
+      "raw_score": 77,
+      "score_cap": 79,
+      "evidence_score": 77,
+      "components": {
+        "topology_provenance": 25,
+        "boundary_evidence": 15,
+        "downstream_corroboration": 25,
+        "temporal_coherence": 10,
+        "sensor_quality": 7
+      },
+      "penalties": {
+        "post_onset_live_contradictions": 0,
+        "missing_or_unhealthy_evidence": -5
+      }
+    },
+    "unbounded_dt_level": {
+      "classification": "UNCONFIRMED_OUTAGE",
+      "precision": "DT_LEVEL",
+      "raw_score": 55,
+      "score_cap": 49,
+      "evidence_score": 49,
+      "components": {
+        "topology_provenance": 25,
+        "boundary_evidence": 0,
+        "downstream_corroboration": 25,
+        "temporal_coherence": 10,
+        "sensor_quality": 5
+      },
+      "penalties": {
+        "post_onset_live_contradictions": 0,
+        "missing_or_unhealthy_evidence": -10
+      }
+    },
+    "dt_fault": {
+      "classification": "DT_FAULT",
+      "precision": "DT_LEVEL",
+      "raw_score": 90,
+      "score_cap": 100,
+      "evidence_score": 90
+    },
+    "feeder_fault": {
+      "classification": "FEEDER_FAULT",
+      "precision": "FEEDER_LEVEL",
+      "raw_score": 95,
+      "score_cap": 100,
+      "evidence_score": 95
+    },
+    "sensor_anomaly": {
+      "classification": "SENSOR_ANOMALY",
+      "precision": "POLE_LEVEL",
+      "raw_score": 92,
+      "score_cap": 100,
+      "evidence_score": 92
+    },
+    "scheduled_outage": {
+      "classification": "SCHEDULED_OUTAGE",
+      "precision": "EXACT_SPAN",
+      "raw_score": 100,
+      "score_cap": 100,
+      "evidence_score": 100
+    },
+    "uncorrelated_feeder_evidence": {
+      "classification": "UNCONFIRMED_OUTAGE",
+      "precision": "FEEDER_LEVEL",
+      "raw_score": 70,
+      "score_cap": 49,
+      "evidence_score": 49
+    }
+  }
+}

@@ -96,7 +96,9 @@ def test_strong_inferred_boundary_returns_probable_span_never_exact() -> None:
     assert candidate.precision == LocalizationPrecision.PROBABLE_SPAN
     assert candidate.precision != LocalizationPrecision.EXACT_SPAN
     assert candidate.topology_source == TopologySource.INFERRED
-    assert candidate.confidence_score <= 79
+    assert candidate.confidence_score == 79
+    assert candidate.evidence.raw_score == 88
+    assert candidate.evidence.score_cap == 79
     assert candidate.evidence.topology_quality_tier == "STRONGLY_INFERRED"
     assert any("inferred" in reason for reason in candidate.evidence.negative_reasons)
 

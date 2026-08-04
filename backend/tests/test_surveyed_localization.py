@@ -238,10 +238,12 @@ def test_post_onset_live_descendant_is_a_contradiction() -> None:
     assert candidate.suppression.source == "telemetry-consistency-rule"
     assert candidate.evidence.post_onset_live_contradictions == ("P-003",)
     assert candidate.evidence.pre_onset_live_observations == ()
-    assert candidate.evidence.components.contradiction_penalty == -20
-    assert candidate.confidence_score < 100
-    assert candidate.evidence.negative_reasons == (
-        "post-onset LIVE contradictions below boundary: P-003",
+    assert candidate.evidence.components.contradiction_penalty == 0
+    assert candidate.evidence.components.missing_evidence_penalty == -5
+    assert candidate.confidence_score == 92
+    assert any(
+        "downstream pole(s) remained LIVE" in reason
+        for reason in candidate.evidence.positive_reasons
     )
 
 
@@ -336,6 +338,8 @@ def test_active_schedule_scopes_suppress_matching_span(
     assert candidate.suppression is not None
     assert candidate.suppression.external_id == "SO-TEST-001"
     assert candidate.suppression.source == "test-schedule-feed"
+    assert candidate.confidence_score == 100
+    assert candidate.evidence.score_policy_version == "evidence-score-v1"
 
 
 @pytest.mark.parametrize(
@@ -439,7 +443,9 @@ def test_missing_boundary_child_degrades_exact_span_to_ordered_corridor() -> Non
     assert candidate.parent_pole_id == "P-001"
     assert candidate.child_pole_id == "P-003"
     assert candidate.affected_pole_ids == ("P-003", "P-004")
-    assert candidate.confidence_score <= 79
+    assert candidate.confidence_score == 77
+    assert candidate.evidence.raw_score == 77
+    assert candidate.evidence.score_cap == 79
     assert candidate.evidence.corridor is not None
     assert candidate.evidence.corridor.ordered_pole_ids == (
         "P-001",
@@ -515,7 +521,9 @@ def test_unbounded_multiple_gaps_degrade_to_dt_level() -> None:
     assert candidate.suspected_asset_type == SuspectedAssetType.DISTRIBUTION_TRANSFORMER
     assert candidate.precision == LocalizationPrecision.DT_LEVEL
     assert candidate.affected_pole_ids == ("P-003", "P-004")
-    assert candidate.confidence_score <= 49
+    assert candidate.confidence_score == 49
+    assert candidate.evidence.raw_score == 55
+    assert candidate.evidence.score_cap == 49
     assert candidate.evidence.corridor is None
     assert candidate.evidence.unusable_pole_ids == ("P-001", "P-002")
 
@@ -571,6 +579,8 @@ def test_transformer_wide_loss_returns_one_dt_candidate() -> None:
     assert candidate.suspected_asset_id == "DT-001"
     assert candidate.affected_dt_ids == ("DT-001",)
     assert candidate.precision == LocalizationPrecision.DT_LEVEL
+    assert candidate.confidence_score == 90
+    assert candidate.confidence_level == "HIGH"
 
 
 def test_correlated_transformer_losses_return_one_feeder_candidate() -> None:
@@ -588,6 +598,7 @@ def test_correlated_transformer_losses_return_one_feeder_candidate() -> None:
     assert candidate.suspected_asset_id == "FDR-001"
     assert candidate.affected_dt_ids == ("DT-001", "DT-002")
     assert candidate.precision == LocalizationPrecision.FEEDER_LEVEL
+    assert candidate.confidence_score == 95
 
 
 def test_weak_feeder_timing_degrades_to_unconfirmed_outage() -> None:
@@ -600,7 +611,10 @@ def test_weak_feeder_timing_degrades_to_unconfirmed_outage() -> None:
 
     assert candidate.classification == FaultClass.UNCONFIRMED_OUTAGE
     assert candidate.confidence_level == "LOW"
-    assert candidate.evidence.components.contradiction_penalty == -20
+    assert candidate.confidence_score == 49
+    assert candidate.evidence.raw_score == 70
+    assert candidate.evidence.score_cap == 49
+    assert candidate.evidence.components.contradiction_penalty == 0
 
 
 def test_feeder_precedence_does_not_suppress_unrelated_span_candidate() -> None:

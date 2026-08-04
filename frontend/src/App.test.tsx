@@ -387,6 +387,8 @@ describe('App', () => {
     expect(screen.getAllByText('SPAN FAULT')).toHaveLength(2)
     expect(screen.getAllByText('EXACT SPAN')).toHaveLength(2)
     expect(screen.getAllByText('3 poles')).toHaveLength(2)
+    expect(screen.getByText('Evidence score 100/100')).toBeInTheDocument()
+    expect(screen.queryByText('100% evidence')).not.toBeInTheDocument()
     expect(
       screen.getByText('surveyed topology supports exact-span precision'),
     ).toBeInTheDocument()

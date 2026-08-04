@@ -79,7 +79,9 @@ export function IncidentList({
                         ? 'SUPPRESSED'
                         : (incident.ticket_status?.replaceAll('_', ' ') ?? 'NO TICKET')}
                     </span>
-                    <span className="confidence-mini">{incident.confidence_score}% evidence</span>
+                    <span className="confidence-mini">
+                      Evidence score {incident.confidence_score}/100
+                    </span>
                   </span>
                 </button>
               </li>

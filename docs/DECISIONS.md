@@ -374,6 +374,38 @@ the evidence does not justify suppression.
 **Deferred:** External schedule-feed refresh, schedule authoring, scope-overrun
 escalation, and later incident reclassification remain in the full backlog.
 
+## 2026-08-04 — Version confidence as a deterministic evidence policy
+
+**Chosen:** `evidence-score-v1` calculates five named positive components:
+topology provenance, boundary evidence, downstream corroboration, temporal
+coherence, and sensor quality. It separately records post-onset-live and
+missing-or-unhealthy-evidence penalties, the raw score, every precision/class
+cap, and stable positive and negative reasons. Sensor quality includes freshness,
+health, power-loss capability, firmware, RSSI, battery, and coverage. Missing
+devices lower evidence but never become dark votes.
+
+Scoring is class-specific after final classification. Post-onset live descendants
+penalize an outage hypothesis but support a surveyed `SENSOR_ANOMALY` diagnosis.
+A matching schedule contributes boundary/scope evidence for a
+`SCHEDULED_OUTAGE`. Confirmed DT and feeder faults can score HIGH at coarse
+precision; only unbounded or otherwise unconfirmed results are capped at 49.
+Inferred probable spans and corridors are capped at 79. The API evidence payload
+identifies the value as an evidence score, and the UI displays `x/100` without a
+percent-likelihood label.
+
+**Reason:** The same telemetry must explain different final classifications
+without carrying a stale span-fault score into an anomaly or schedule result.
+Versioning and retained raw calibration results keep historical incidents
+auditable when thresholds change.
+
+**Calibration:** Fixed outputs for surveyed, inferred, corridor, DT, feeder,
+anomaly, schedule, and unconfirmed fixtures are recorded in
+[`PB06-CALIBRATION.json`](PB06-CALIBRATION.json) and protected by focused tests.
+
+**Rejected:** Learned probabilities, unversioned tuning, treating all `DT_LEVEL`
+results as low confidence, counting silence as darkness, and displaying the
+evidence score as a percentage likelihood.
+
 ## What we would do with two more weeks
 
 - Add a PostgreSQL inbox/outbox around queue publication.

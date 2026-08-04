@@ -109,21 +109,51 @@ class NetworkSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class ConfidenceComponents:
-    topology: int
-    boundary_clarity: int
+    topology_provenance: int
+    boundary_evidence: int
     downstream_corroboration: int
     temporal_coherence: int
     sensor_quality: int
     contradiction_penalty: int
+    missing_evidence_penalty: int
+
+    @property
+    def topology(self) -> int:
+        """Compatibility alias for incidents created before PB-06."""
+        return self.topology_provenance
+
+    @property
+    def boundary_clarity(self) -> int:
+        """Compatibility alias for incidents created before PB-06."""
+        return self.boundary_evidence
 
     def as_dict(self) -> dict[str, int]:
         return {
-            "topology": self.topology,
-            "boundary_clarity": self.boundary_clarity,
+            "topology_provenance": self.topology_provenance,
+            "boundary_evidence": self.boundary_evidence,
             "downstream_corroboration": self.downstream_corroboration,
             "temporal_coherence": self.temporal_coherence,
             "sensor_quality": self.sensor_quality,
-            "contradiction_penalty": self.contradiction_penalty,
+        }
+
+    def penalties_as_dict(self) -> dict[str, int]:
+        return {
+            "post_onset_live_contradictions": self.contradiction_penalty,
+            "missing_or_unhealthy_evidence": self.missing_evidence_penalty,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ConfidenceCap:
+    name: str
+    maximum: int
+    reason: str
+
+    def as_dict(self) -> dict[str, str | int]:
+        return {
+            "name": self.name,
+            "maximum": self.maximum,
+            "reason": self.reason,
         }
 
 
@@ -175,6 +205,12 @@ class CandidateEvidence:
     topology_quality_score: float = 1.0
     topology_quality_tier: str = "SURVEYED"
     topology_quality_reasons: tuple[str, ...] = ()
+    score_kind: str = "EVIDENCE_SCORE"
+    score_interpretation: str = "Deterministic evidence score; not a probability."
+    score_policy_version: str = "evidence-score-v1"
+    raw_score: int = 0
+    score_cap: int = 100
+    caps: tuple[ConfidenceCap, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -188,11 +224,18 @@ class CandidateEvidence:
             "positive_reasons": list(self.positive_reasons),
             "negative_reasons": list(self.negative_reasons),
             "components": self.components.as_dict(),
+            "penalties": self.components.penalties_as_dict(),
             "unusable_pole_ids": list(self.unusable_pole_ids),
             "corridor": self.corridor.as_dict() if self.corridor is not None else None,
             "topology_quality_score": self.topology_quality_score,
             "topology_quality_tier": self.topology_quality_tier,
             "topology_quality_reasons": list(self.topology_quality_reasons),
+            "score_kind": self.score_kind,
+            "score_interpretation": self.score_interpretation,
+            "score_policy_version": self.score_policy_version,
+            "raw_score": self.raw_score,
+            "score_cap": self.score_cap,
+            "caps": [cap.as_dict() for cap in self.caps],
         }
 
 
