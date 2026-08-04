@@ -12,11 +12,16 @@ from propel.domain.enums import (
     TelemetryEventType,
     TopologySource,
 )
+from propel.simulator.delivery import (
+    DEFAULT_POWER_LOSS_DELIVERY_RATIO,
+    DEFAULT_POWER_LOSS_DELIVERY_SEED,
+    power_loss_delivery_succeeds,
+)
 from propel.telemetry.ingestion import TelemetryCommand
 from propel.topology.inference import haversine_distance_m, infer_geographic_topology
 from propel.topology.models import TopologyPole, TopologyRequest
 
-GENERATOR_VERSION = "subdivision-v1"
+GENERATOR_VERSION = "subdivision-v2"
 EARTH_METRES_PER_DEGREE = 111_320.0
 
 
@@ -338,10 +343,25 @@ def validate_generated_network(network: GeneratedNetwork) -> None:
                     raise ValueError("scenario references an unknown pole")
 
 
+def _fault_delivery_context(network: GeneratedNetwork, scenario: GeneratedScenario) -> str:
+    if len(scenario.faults) != 1:
+        return f"{network.dataset_id}:{scenario.scenario_id}"
+    fault = scenario.faults[0]
+    if fault.fault_type == SimulatorFaultType.SPAN_FAULT:
+        return (
+            f"{fault.fault_type.value}:{fault.dt_id}:{fault.parent_pole_id}:{fault.child_pole_id}"
+        )
+    scope_id = fault.dt_id if fault.fault_type == SimulatorFaultType.DT_FAULT else fault.feeder_id
+    return f"{fault.fault_type.value}:{scope_id}"
+
+
 def generate_fault_telemetry(
     network: GeneratedNetwork,
     scenario: GeneratedScenario,
     occurred_at: datetime,
+    *,
+    power_loss_delivery_ratio: float = DEFAULT_POWER_LOSS_DELIVERY_RATIO,
+    power_loss_delivery_seed: int = DEFAULT_POWER_LOSS_DELIVERY_SEED,
 ) -> tuple[GeneratedTelemetryDelivery, ...]:
     if occurred_at.utcoffset() is None:
         raise ValueError("scenario time must be timezone-aware")
@@ -369,6 +389,12 @@ def generate_fault_telemetry(
                 pole.pole_id for pole in network.poles if pole.feeder_id == fault.feeder_id
             )
     omitted = set(scenario.noise.omit_loss_pole_ids)
+    forced_delivery = (
+        set(scenario.noise.duplicate_pole_ids)
+        | set(scenario.noise.delayed_pole_ids)
+        | set(scenario.noise.out_of_order_pole_ids)
+    )
+    loss_delivery_context = _fault_delivery_context(network, scenario)
     deliveries: list[GeneratedTelemetryDelivery] = []
     for pole_id in sorted(upstream):
         device = device_by_pole.get(pole_id)
@@ -383,6 +409,15 @@ def generate_fault_telemetry(
             or device.health_status != DeviceHealthStatus.HEALTHY
             or not device.can_report_power_loss
             or pole_id in omitted
+            or (
+                pole_id not in forced_delivery
+                and not power_loss_delivery_succeeds(
+                    pole_id,
+                    context=loss_delivery_context,
+                    ratio=power_loss_delivery_ratio,
+                    seed=power_loss_delivery_seed,
+                )
+            )
         ):
             continue
         loss = _delivery(
@@ -424,8 +459,17 @@ def generate_restoration_telemetry(
     network: GeneratedNetwork,
     scenario: GeneratedScenario,
     occurred_at: datetime,
+    *,
+    power_loss_delivery_ratio: float = DEFAULT_POWER_LOSS_DELIVERY_RATIO,
+    power_loss_delivery_seed: int = DEFAULT_POWER_LOSS_DELIVERY_SEED,
 ) -> tuple[GeneratedTelemetryDelivery, ...]:
-    fault_deliveries = generate_fault_telemetry(network, scenario, occurred_at)
+    fault_deliveries = generate_fault_telemetry(
+        network,
+        scenario,
+        occurred_at,
+        power_loss_delivery_ratio=power_loss_delivery_ratio,
+        power_loss_delivery_seed=power_loss_delivery_seed,
+    )
     affected_ids = tuple(
         sorted(
             {
@@ -745,6 +789,14 @@ def _generate_scenarios(network: GeneratedNetwork) -> tuple[GeneratedScenario, .
         inferred,
     )
     second_edge = _scenario_edge(truth_by_dt[second_surveyed.dt_id], devices, second_surveyed.dt_id)
+    third_transformer = next(
+        item
+        for item in network.transformers
+        if item.dt_id not in {surveyed.dt_id, second_surveyed.dt_id}
+    )
+    third_edge = _scenario_edge(
+        truth_by_dt[third_transformer.dt_id], devices, third_transformer.dt_id
+    )
     children: defaultdict[str, list[str]] = defaultdict(list)
     for edge in truth_by_dt[surveyed.dt_id]:
         if edge.parent_pole_id is not None:
@@ -824,8 +876,13 @@ def _generate_scenarios(network: GeneratedNetwork) -> tuple[GeneratedScenario, .
             ),
         ),
         GeneratedScenario(
+            "dead-sensor",
+            "One healthy powered pole device stops reporting without a grid fault",
+            (),
+        ),
+        GeneratedScenario(
             "simultaneous-spans",
-            "Two independent physical span faults",
+            "Three independent physical span faults",
             (
                 GeneratedFault(
                     SimulatorFaultType.SPAN_FAULT,
@@ -838,6 +895,12 @@ def _generate_scenarios(network: GeneratedNetwork) -> tuple[GeneratedScenario, .
                     dt_id=second_surveyed.dt_id,
                     parent_pole_id=second_edge.parent_pole_id,
                     child_pole_id=second_edge.child_pole_id,
+                ),
+                GeneratedFault(
+                    SimulatorFaultType.SPAN_FAULT,
+                    dt_id=third_transformer.dt_id,
+                    parent_pole_id=third_edge.parent_pole_id,
+                    child_pole_id=third_edge.child_pole_id,
                 ),
             ),
         ),

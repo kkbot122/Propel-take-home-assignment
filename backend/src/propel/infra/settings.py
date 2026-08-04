@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     simulator_request_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
     simulator_heartbeat_interval_seconds: float = Field(default=600, gt=0, le=86_400)
     simulator_heartbeat_batch_size: int = Field(default=500, ge=1, le=2_000)
+    simulator_power_loss_delivery_ratio: float = Field(default=0.70, gt=0, le=1)
+    simulator_power_loss_delivery_seed: int = Field(default=287, ge=0)
     simulator_enabled: bool = True
     cors_allowed_origins: str = Field(default="", max_length=2_048)
     allowed_hosts: str = Field(default="*", max_length=2_048)

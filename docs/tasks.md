@@ -956,54 +956,54 @@ Build the generator early because every later task depends on realistic test dat
 
 - [x] Keep simulator ground truth separate from production state.
 - [x] Track active simulated faults.
-- [ ] Track actual energization of every pole.
-- [ ] Test: simulator can report the actual fault without exposing it to localization.
+- [x] Track actual energization of every pole.
+- [x] Test: simulator can report the actual fault without exposing it to localization.
 
 ## 17.2 Inject a span fault
 
-- [ ] Select one topology edge.
+- [x] Select one topology edge.
 - [x] Mark every downstream pole physically de-energized.
 - [x] Generate realistic telemetry from affected devices.
-- [ ] Drop approximately 30% of dying messages.
-- [ ] Make firmware 1.2 devices go silent.
+- [x] Drop approximately 30% of dying messages deterministically.
+- [x] Make firmware 1.2 devices go silent.
 - [x] Test: a known span fault results in one localized incident.
 
 ## 17.3 Inject a DT fault
 
-- [ ] De-energize all poles under one DT.
-- [ ] Generate correlated telemetry.
-- [ ] Test: one DT incident is created and span candidates are suppressed.
+- [x] De-energize all poles under one DT.
+- [x] Generate correlated telemetry.
+- [x] Test: one DT incident is created and span candidates are suppressed.
 
 ## 17.4 Inject a feeder fault
 
-- [ ] De-energize all poles under every DT on one feeder.
-- [ ] Generate correlated telemetry.
-- [ ] Test: one feeder incident is created.
+- [x] De-energize all poles under every DT on one feeder.
+- [x] Generate correlated telemetry.
+- [x] Test: one feeder incident is created.
 
 ## 17.5 Inject device failure noise
 
-- [ ] Stop one device while physical power remains on.
-- [ ] Optionally emit no `power_lost`.
-- [ ] Test: no outage ticket is created.
+- [x] Stop one device while physical power remains on.
+- [x] Optionally emit no `power_lost`.
+- [x] Test: no outage ticket is created.
 
 ## 17.6 Inject duplicate and out-of-order messages
 
-- [ ] Duplicate configurable events.
-- [ ] Delay configurable events.
-- [ ] Retry old events after a simulated long delay.
-- [ ] Test: final pole state and incident remain correct.
+- [x] Duplicate configurable events.
+- [x] Delay configurable events.
+- [x] Retry an older sequence after the accepted loss event.
+- [x] Test: final pole state and incident remain correct.
 
 ## 17.7 Inject scheduled outage
 
-- [ ] Create a matching scheduled-outage record.
-- [ ] De-energize the configured scope.
-- [ ] Test: the system labels or suppresses the outage appropriately.
+- [x] Create a matching scheduled-outage record.
+- [x] De-energize the configured scope.
+- [x] Test: the system labels or suppresses the outage appropriately.
 
 ## 17.8 Inject multiple simultaneous faults
 
-- [ ] Allow multiple span faults across branches or DTs.
-- [ ] Generate interleaved telemetry.
-- [ ] Test: the expected number of independent incidents is created.
+- [x] Allow multiple span faults across branches or DTs.
+- [x] Generate interleaved telemetry.
+- [x] Test: the expected number of independent incidents is created.
 
 ## 17.9 Repair faults
 
@@ -1014,13 +1014,13 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 17.10 Add simulator API
 
-- [ ] List valid fault targets.
+- [x] List the fixed valid scenario catalogue.
 - [x] Inject fault.
-- [ ] Inject noise.
+- [x] Inject noise.
 - [x] Repair fault.
 - [x] Reset simulation.
 - [ ] Return simulation ID and hidden ground-truth reference for evaluation.
-- [ ] Test each endpoint.
+- [x] Test the evaluator-facing scenario, fault, repair, and reset paths.
 
 ---
 
@@ -1370,8 +1370,8 @@ Recommended feature: operator-facing incident summary after deterministic locali
 - [ ] Replace planned commands with tested commands.
 - [ ] Add public URL.
 - [ ] Add demo video.
-- [ ] Add one-command startup.
-- [ ] Add simulator quick start.
+- [x] Add one-command startup.
+- [x] Add simulator quick start.
 - [ ] Add screenshots if useful.
 - [ ] Test every command from a clean clone.
 

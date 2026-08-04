@@ -31,7 +31,12 @@ class SimulatorHeartbeatResult:
 class PostgresSimulatorHeartbeatEmitter:
     """Refresh online simulated devices without reviving modeled offline devices."""
 
-    _OFFLINE_REASONS = ("generated_offline", "simulator_missing_device")
+    _OFFLINE_REASONS = (
+        "generated_offline",
+        "simulator_missing_device",
+        "simulator_device_failure",
+        "simulator_device_failure_pending",
+    )
 
     def __init__(
         self,

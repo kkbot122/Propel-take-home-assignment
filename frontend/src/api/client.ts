@@ -8,6 +8,8 @@ import type {
   NetworkSubdivision,
   OperationalDiagnostics,
   SimulatedFault,
+  SimulatorScenario,
+  SimulatorScenarioRun,
   DeviceHealthDiagnosticPage,
   TelemetryDiagnosticPage,
   Ticket,
@@ -92,9 +94,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(request),
     }),
-  repairFault: (faultId: string) =>
+  simulatorScenarios: () =>
+    requestJson<SimulatorScenario[]>('/api/simulator/scenarios'),
+  runSimulatorScenario: (scenarioId: string) =>
+    requestJson<SimulatorScenarioRun>(`/api/simulator/scenarios/${scenarioId}/run`, {
+      method: 'POST',
+    }),
+  repairFault: (faultId: string, restorationFraction = 1) =>
     requestJson<SimulatedFault>(`/api/simulator/faults/${faultId}/repair`, {
       method: 'POST',
+      ...(restorationFraction === 1
+        ? {}
+        : { body: JSON.stringify({ restoration_fraction: restorationFraction }) }),
     }),
   resetSimulator: () =>
     requestJson<{ status: 'reset'; repaired_faults: SimulatedFault[] }>(

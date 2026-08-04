@@ -125,6 +125,11 @@ def create_app(
                     application_settings.simulator_telemetry_url,
                     timeout_seconds=application_settings.simulator_request_timeout_seconds,
                 ),
+                power_loss_delivery_ratio=(
+                    application_settings.simulator_power_loss_delivery_ratio
+                ),
+                power_loss_delivery_seed=application_settings.simulator_power_loss_delivery_seed,
+                stale_after_seconds=application_settings.telemetry_stale_after_seconds,
             )
         elif simulator_service is not None:
             application.state.simulator_service = simulator_service

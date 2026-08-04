@@ -2,7 +2,7 @@ import json
 import logging
 from collections import defaultdict
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -459,6 +459,83 @@ class PostgresIncidentService:
             )
         )
         return view
+
+    async def claim_simulator_repairs_for_poles(
+        self,
+        pole_ids: Sequence[str],
+        *,
+        actor: str = "simulator-crew",
+    ) -> tuple[UUID, ...]:
+        """Record the simulated crew workflow before restoration telemetry is emitted."""
+        if not pole_ids:
+            return ()
+        # The claim is recorded immediately before simulator telemetry is emitted.
+        # Keep the ordering strict even when tests or low-resolution clocks return
+        # the same timestamp for both operations.
+        occurred_at = self._clock() - timedelta(microseconds=1)
+        claimed_ticket_ids: list[UUID] = []
+        try:
+            async with self._session_factory.begin() as session:
+                ticket_ids = tuple(
+                    await session.scalars(
+                        select(Ticket.ticket_id)
+                        .join(IncidentPole, IncidentPole.incident_id == Ticket.incident_id)
+                        .join(Pole, Pole.id == IncidentPole.pole_id)
+                        .where(
+                            Pole.pole_id.in_(tuple(pole_ids)),
+                            Ticket.status.in_(
+                                (
+                                    TicketStatus.DETECTED,
+                                    TicketStatus.ACKNOWLEDGED,
+                                    TicketStatus.CREW_ASSIGNED,
+                                    TicketStatus.RESOLVED,
+                                )
+                            ),
+                        )
+                        .distinct()
+                    )
+                )
+                tickets = tuple(
+                    await session.scalars(
+                        select(Ticket)
+                        .where(Ticket.ticket_id.in_(ticket_ids))
+                        .order_by(Ticket.ticket_id)
+                        .with_for_update()
+                    )
+                )
+                for ticket in tickets:
+                    while ticket.status != TicketStatus.RESOLVED:
+                        previous_status = ticket.status
+                        requested_status = {
+                            TicketStatus.DETECTED: TicketStatus.ACKNOWLEDGED,
+                            TicketStatus.ACKNOWLEDGED: TicketStatus.CREW_ASSIGNED,
+                            TicketStatus.CREW_ASSIGNED: TicketStatus.RESOLVED,
+                        }[previous_status]
+                        require_operator_transition(previous_status, requested_status)
+                        details: dict[str, Any] = {"source": "simulator"}
+                        if requested_status == TicketStatus.CREW_ASSIGNED:
+                            ticket.assigned_crew = "Simulator Crew"
+                            details["assigned_crew"] = ticket.assigned_crew
+                        if requested_status == TicketStatus.RESOLVED:
+                            ticket.resolution_claimed_at = occurred_at
+                            await self._freeze_restoration_set(session, ticket, occurred_at)
+                        ticket.status = requested_status
+                        ticket.updated_at = occurred_at
+                        session.add(
+                            TicketEvent(
+                                ticket_id=ticket.ticket_id,
+                                from_status=previous_status,
+                                to_status=requested_status,
+                                actor=actor,
+                                reason="simulated crew repair workflow",
+                                occurred_at=occurred_at,
+                                details=details,
+                            )
+                        )
+                    claimed_ticket_ids.append(ticket.ticket_id)
+        except SQLAlchemyError as error:
+            raise IncidentStoreUnavailableError from error
+        return tuple(claimed_ticket_ids)
 
     async def _freeze_restoration_set(
         self,

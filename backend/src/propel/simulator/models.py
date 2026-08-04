@@ -27,6 +27,29 @@ class SimulatedFaultView:
     injection_telemetry_at: datetime | None
     repaired_at: datetime | None
     emitted_event_ids: tuple[UUID, ...] = ()
+    restored_pole_ids: tuple[str, ...] = ()
+    restoration_fraction: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SimulatorScenarioView:
+    scenario_id: str
+    description: str
+    fault_count: int
+    scheduled: bool
+    restoration_fraction: float
+    noise_modes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SimulatorScenarioRunView:
+    scenario_id: str
+    description: str
+    faults: tuple[SimulatedFaultView, ...]
+    restoration_fraction: float
+    failed_device_id: str | None = None
+    failed_pole_id: str | None = None
+    scheduled_outage_id: str | None = None
 
 
 class SimulatorTelemetryGateway(Protocol):

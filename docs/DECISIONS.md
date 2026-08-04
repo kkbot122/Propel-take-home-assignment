@@ -497,6 +497,23 @@ After 32 minutes the whole demo became stale, and fault injection could produce 
 commands. Periodic public-path telemetry preserves both long-running usability and
 the distinction between silence, intentional offline devices, and actual outages.
 
+## 2026-08-05 — Make dying-message loss deterministic and scope-specific
+
+**Chosen:** For every healthy firmware 1.3+ device inside a simulated physical
+fault, decide its single `power_lost` delivery attempt with a stable SHA-256 rank
+of the configured seed, physical fault scope, and pole ID. The default success
+ratio is 70%. Independently offline devices, firmware-1.2 devices, explicit
+missing devices, and explicit scenario omissions remain silent before this policy
+is applied. Generated telemetry and live API-driven faults use the same policy.
+
+**Reason:** The field contract describes an approximately 70% capacitor-backed
+dying-message success rate. A process RNG would make evaluator results and
+regressions drift between runs; a stable Bernoulli decision preserves the real
+per-device behavior while making the same configured scenario reproducible.
+
+**Rejected:** Sending every modern-device loss message, dropping exactly 30% by
+list position, and storing mutable random state in the API process.
+
 ## 2026-08-04 — Separate liveness from partial operational diagnostics
 
 **Chosen:** `/health` remains a strict PostgreSQL-and-Redis deployment gate. A

@@ -32,6 +32,7 @@ from propel.domain.enums import (
 from propel.infra.analysis import PostgresDtSnapshotRepository, RedisAnalysisScheduler
 from propel.infra.database.models import (
     Device,
+    DeviceBinding,
     DeviceHealth,
     Incident,
     Pole,
@@ -50,6 +51,7 @@ from propel.infra.telemetry import (
     RedisTelemetryPublisher,
 )
 from propel.infra.telemetry_processor import PostgresTelemetryProcessor
+from propel.simulator.delivery import power_loss_delivery_succeeds
 from propel.simulator.generation import generate_network
 from propel.simulator.models import SimulatorEmissionReceipt
 from propel.telemetry.consumer import RedisTelemetryConsumer
@@ -1040,7 +1042,48 @@ async def test_generated_hidden_span_uses_physical_truth_and_public_ingestion(
     analysis_harness.simulated_fault_ids.add(simulated_fault_id)
     analysis_harness.event_ids.update(UUID(item) for item in injected["emitted_event_ids"])
     assert injected["deenergized_pole_ids"] == expected_affected
-    assert 0 < len(injected["emitted_event_ids"]) < len(expected_affected) + 1
+    session_factory = async_sessionmaker(analysis_harness.engine, expire_on_commit=False)
+    async with session_factory() as session:
+        durable_devices = (
+            await session.execute(
+                select(
+                    Pole.pole_id,
+                    DeviceHealth.status,
+                    DeviceHealth.status_reason,
+                    DeviceHealth.can_report_power_loss,
+                )
+                .join(DeviceBinding, DeviceBinding.pole_id == Pole.id)
+                .join(Device, Device.id == DeviceBinding.device_id)
+                .outerjoin(DeviceHealth, DeviceHealth.device_id == Device.id)
+                .where(
+                    Pole.pole_id.in_(expected_affected),
+                    DeviceBinding.valid_to.is_(None),
+                )
+            )
+        ).all()
+    report_capable_affected = {
+        row.pole_id
+        for row in durable_devices
+        if (
+            row.status in (None, DeviceHealthStatus.HEALTHY)
+            or row.status_reason == "device_silence_timeout"
+        )
+        and row.can_report_power_loss is not False
+    }
+    expected_reporters = {
+        pole_id
+        for pole_id in report_capable_affected
+        if power_loss_delivery_succeeds(
+            pole_id,
+            context=(
+                f"{SimulatorFaultType.SPAN_FAULT.value}:"
+                f"{fault.dt_id}:{fault.parent_pole_id}:{fault.child_pole_id}"
+            ),
+        )
+    }
+    # One upstream heartbeat accompanies the deterministic subset of dying messages.
+    assert len(injected["emitted_event_ids"]) == len(expected_reporters) + 1
+    assert len(expected_reporters) / len(report_capable_affected) == pytest.approx(0.70, abs=0.12)
 
 
 @pytest.mark.asyncio
@@ -1161,7 +1204,7 @@ async def test_missing_device_noise_persists_and_serves_corridor_precision(
 
 
 @pytest.mark.asyncio
-async def test_two_independent_simulated_faults_remain_separate_through_restoration(
+async def test_three_independent_simulated_faults_create_three_tickets_and_repair_independently(
     analysis_harness: AnalysisHarness,
 ) -> None:
     base = datetime.now(UTC)
@@ -1204,6 +1247,16 @@ async def test_two_independent_simulated_faults_remain_separate_through_restorat
                     "child_pole_id": "P-102",
                 },
             )
+            third_response = await client.post(
+                "/api/simulator/faults",
+                json={
+                    "fault_type": "SPAN_FAULT",
+                    "dt_id": "DT-003",
+                    "parent_pole_id": "P-201",
+                    "child_pole_id": "P-202",
+                    "delayed_loss_pole_ids": ["P-202", "P-203", "P-204"],
+                },
+            )
             overlap_response = await client.post(
                 "/api/simulator/faults",
                 json={"fault_type": "FEEDER_FAULT", "feeder_id": "FDR-001"},
@@ -1211,18 +1264,27 @@ async def test_two_independent_simulated_faults_remain_separate_through_restorat
 
             assert first_response.status_code == 201, first_response.json()
             assert second_response.status_code == 201, second_response.json()
+            assert third_response.status_code == 201, third_response.json()
             assert overlap_response.status_code == 409
             assert overlap_response.json()["error"]["code"] == "SIMULATOR_FAULT_OVERLAP"
             first_fault = first_response.json()
             second_fault = second_response.json()
+            third_fault = third_response.json()
             first_fault_id = UUID(first_fault["fault_id"])
             second_fault_id = UUID(second_fault["fault_id"])
-            analysis_harness.simulated_fault_ids.update((first_fault_id, second_fault_id))
+            third_fault_id = UUID(third_fault["fault_id"])
+            analysis_harness.simulated_fault_ids.update(
+                (first_fault_id, second_fault_id, third_fault_id)
+            )
             analysis_harness.event_ids.update(
                 UUID(item)
-                for item in first_fault["emitted_event_ids"] + second_fault["emitted_event_ids"]
+                for item in (
+                    first_fault["emitted_event_ids"]
+                    + second_fault["emitted_event_ids"]
+                    + third_fault["emitted_event_ids"]
+                )
             )
-            assert await consumer.consume_new_once() == 6
+            assert await consumer.consume_new_once() == 10
 
             clock.value = base + timedelta(seconds=11)
             scheduler = RedisAnalysisScheduler(
@@ -1234,12 +1296,21 @@ async def test_two_independent_simulated_faults_remain_separate_through_restorat
                 candidate_sink=incidents,
                 clock=clock,
             )
-            candidates = [*await scheduler.run_due_once(), *await scheduler.run_due_once()]
+            candidates = [
+                *await scheduler.run_due_once(),
+                *await scheduler.run_due_once(),
+                *await scheduler.run_due_once(),
+            ]
             assert [candidate.suspected_asset_id for candidate in candidates] == [
                 "P-001->P-002",
                 "P-101->P-102",
+                "P-201->P-202",
             ]
-            assert set(candidates[0].affected_pole_ids).isdisjoint(candidates[1].affected_pole_ids)
+            assert all(
+                set(left.affected_pole_ids).isdisjoint(right.affected_pole_ids)
+                for index, left in enumerate(candidates)
+                for right in candidates[index + 1 :]
+            )
 
             await asyncio.gather(
                 incidents.persist_candidates(candidates),
@@ -1252,11 +1323,13 @@ async def test_two_independent_simulated_faults_remain_separate_through_restorat
                 in {
                     "span:DT-001:P-001->P-002",
                     "span:DT-002:P-101->P-102",
+                    "probable-span:DT-003:P-201->P-202",
                 }
             }
             assert set(active) == {
                 "span:DT-001:P-001->P-002",
                 "span:DT-002:P-101->P-102",
+                "probable-span:DT-003:P-201->P-202",
             }
             assert all(item.ticket_id is not None for item in active.values())
             for item in active.values():
@@ -1264,30 +1337,26 @@ async def test_two_independent_simulated_faults_remain_separate_through_restorat
 
             first_incident = active["span:DT-001:P-001->P-002"]
             second_incident = active["span:DT-002:P-101->P-102"]
+            third_incident = active["probable-span:DT-003:P-201->P-202"]
             assert first_incident.ticket_id is not None
             assert second_incident.ticket_id is not None
-            await client.post(
-                f"/api/tickets/{first_incident.ticket_id}/acknowledge",
-                json={"actor": "operator-1"},
-            )
-            await client.post(
-                f"/api/tickets/{first_incident.ticket_id}/assign",
-                json={"actor": "operator-1", "assigned_crew": "Crew-3"},
-            )
-            clock.value = base + timedelta(seconds=12)
-            await client.post(
-                f"/api/tickets/{first_incident.ticket_id}/resolve",
-                json={"actor": "operator-1", "reason": "first repair claimed"},
-            )
-
+            assert third_incident.ticket_id is not None
             clock.value = base + timedelta(seconds=31)
             repair_response = await client.post(f"/api/simulator/faults/{first_fault_id}/repair")
             assert repair_response.status_code == 200
             repair_events = repair_response.json()["emitted_event_ids"]
             analysis_harness.event_ids.update(UUID(item) for item in repair_events)
             assert await consumer.consume_new_once() == 6
+            repair_claim = await incidents.get_ticket(first_incident.ticket_id)
+            assert repair_claim.status == TicketStatus.RESOLVED
+            assert [event.to_status for event in repair_claim.events][-3:] == [
+                TicketStatus.ACKNOWLEDGED,
+                TicketStatus.CREW_ASSIGNED,
+                TicketStatus.RESOLVED,
+            ]
+            assert {event.actor for event in repair_claim.events[-3:]} == {"simulator-crew"}
 
-            clock.value = base + timedelta(seconds=42)
+            clock.value = base + timedelta(seconds=43)
             assert (
                 await incidents.verify_restorations_once(
                     threshold=0.8,
@@ -1299,6 +1368,9 @@ async def test_two_independent_simulated_faults_remain_separate_through_restorat
                 TicketStatus.CLOSED
             )
             assert (await incidents.get_ticket(second_incident.ticket_id)).status == (
+                TicketStatus.DETECTED
+            )
+            assert (await incidents.get_ticket(third_incident.ticket_id)).status == (
                 TicketStatus.DETECTED
             )
 
@@ -1321,9 +1393,13 @@ async def test_two_independent_simulated_faults_remain_separate_through_restorat
             clock.value = base + timedelta(seconds=43)
             reset_response = await client.post("/api/simulator/reset")
             assert reset_response.status_code == 200
-            reset_events = reset_response.json()["repaired_faults"][0]["emitted_event_ids"]
+            reset_events = [
+                event_id
+                for repaired_fault in reset_response.json()["repaired_faults"]
+                for event_id in repaired_fault["emitted_event_ids"]
+            ]
             analysis_harness.event_ids.update(UUID(item) for item in reset_events)
-            assert await consumer.consume_new_once() == 2
+            assert await consumer.consume_new_once() == 8
 
 
 @pytest.mark.asyncio
@@ -1497,6 +1573,29 @@ async def test_simulator_fault_repair_is_verified_through_public_telemetry(
             assert (await incidents.get_ticket(incident.ticket_id)).status.value == "RESOLVED"
 
             clock.value = base + timedelta(seconds=31)
+            partial_response = await client.post(
+                f"/api/simulator/faults/{fault_id}/repair",
+                json={"restoration_fraction": 0.5},
+            )
+            assert partial_response.status_code == 200
+            partial = partial_response.json()
+            assert partial["status"] == SimulatorFaultStatus.ACTIVE
+            assert partial["restoration_fraction"] == 0.5
+            assert len(partial["restored_pole_ids"]) == 2
+            assert len(partial["emitted_event_ids"]) == 4
+            analysis_harness.event_ids.update(UUID(item) for item in partial["emitted_event_ids"])
+            assert await consumer.consume_new_once() == 4
+
+            clock.value = base + timedelta(seconds=42)
+            assert (
+                await incidents.verify_restorations_once(threshold=0.8, stabilization_seconds=10)
+                == 0
+            )
+            partial_ticket = await incidents.get_ticket(incident.ticket_id)
+            assert partial_ticket.status == TicketStatus.RESOLVED
+            assert partial_ticket.remaining_dark_count == 1
+
+            clock.value = base + timedelta(seconds=43)
             repair_response = await client.post(f"/api/simulator/faults/{fault_id}/repair")
             assert repair_response.status_code == 200
             repaired = repair_response.json()
@@ -1522,14 +1621,14 @@ async def test_simulator_fault_repair_is_verified_through_public_telemetry(
                     )
                 )
             assert states == (PoleStatus.LIVE, PoleStatus.LIVE, PoleStatus.LIVE)
-            assert simulator_event_count == 10
+            assert simulator_event_count == 14
 
-            clock.value = base + timedelta(seconds=40)
+            clock.value = base + timedelta(seconds=52)
             assert (
                 await incidents.verify_restorations_once(threshold=0.8, stabilization_seconds=10)
                 == 0
             )
-            clock.value = base + timedelta(seconds=41)
+            clock.value = base + timedelta(seconds=53)
             assert (
                 await incidents.verify_restorations_once(threshold=0.8, stabilization_seconds=10)
                 == 1

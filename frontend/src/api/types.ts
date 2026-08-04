@@ -155,6 +155,8 @@ export interface SimulatedFault {
   injection_telemetry_at: string | null
   repaired_at: string | null
   emitted_event_ids: string[]
+  restored_pole_ids: string[]
+  restoration_fraction: number | null
 }
 
 export interface InjectFaultRequest {
@@ -165,6 +167,28 @@ export interface InjectFaultRequest {
   child_pole_id?: string
   missing_device_pole_ids?: string[]
   omit_loss_pole_ids?: string[]
+  duplicate_loss_pole_ids?: string[]
+  delayed_loss_pole_ids?: string[]
+  out_of_order_pole_ids?: string[]
+}
+
+export interface SimulatorScenario {
+  scenario_id: string
+  description: string
+  fault_count: number
+  scheduled: boolean
+  restoration_fraction: number
+  noise_modes: string[]
+}
+
+export interface SimulatorScenarioRun {
+  scenario_id: string
+  description: string
+  faults: SimulatedFault[]
+  restoration_fraction: number
+  failed_device_id: string | null
+  failed_pole_id: string | null
+  scheduled_outage_id: string | null
 }
 
 export interface HealthResponse {

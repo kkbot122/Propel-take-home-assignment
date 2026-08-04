@@ -7,10 +7,14 @@ from propel.api.routes.telemetry import error_response
 from propel.api.schemas.simulator import (
     GeneratedNetworkManifestResponse,
     InjectFixedFaultRequest,
+    RepairSimulatedFaultRequest,
     SimulatedFaultResponse,
     SimulatorResetResponse,
+    SimulatorScenarioResponse,
+    SimulatorScenarioRunResponse,
 )
 from propel.api.schemas.telemetry import ErrorResponse
+from propel.infra.incidents import IncidentStoreUnavailableError
 from propel.infra.simulator import (
     ActiveSimulatorFaultError,
     InvalidSimulatorNoiseError,
@@ -20,6 +24,7 @@ from propel.infra.simulator import (
     PostgresSimulatorService,
     SimulatorDatasetNotFoundError,
     SimulatorFaultNotFoundError,
+    SimulatorScenarioNotFoundError,
     SimulatorStoreUnavailableError,
     SimulatorTelemetryUnavailableError,
 )
@@ -71,6 +76,82 @@ async def generated_manifest(
     return GeneratedNetworkManifestResponse.model_validate(manifest)
 
 
+@router.get(
+    "/scenarios",
+    response_model=list[SimulatorScenarioResponse],
+    responses=ERROR_RESPONSES,
+)
+async def list_scenarios(request: Request) -> list[SimulatorScenarioResponse] | JSONResponse:
+    try:
+        scenarios = await simulator_service(request).list_scenarios()
+    except SimulatorDatasetNotFoundError:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "SIMULATOR_DATASET_NOT_FOUND",
+            "generated simulator dataset does not exist",
+            retryable=False,
+        )
+    except SimulatorStoreUnavailableError:
+        return simulator_unavailable(
+            "SIMULATOR_STORE_UNAVAILABLE",
+            "simulator state is temporarily unavailable",
+        )
+    return [SimulatorScenarioResponse.model_validate(item) for item in scenarios]
+
+
+@router.post(
+    "/scenarios/{scenario_id}/run",
+    response_model=SimulatorScenarioRunResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=ERROR_RESPONSES,
+)
+async def run_scenario(
+    scenario_id: str,
+    request: Request,
+) -> SimulatorScenarioRunResponse | JSONResponse:
+    try:
+        result = await simulator_service(request).run_scenario(scenario_id)
+    except SimulatorScenarioNotFoundError:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "SIMULATOR_SCENARIO_NOT_FOUND",
+            "simulator scenario does not exist",
+            retryable=False,
+        )
+    except ActiveSimulatorFaultError:
+        return error_response(
+            status.HTTP_409_CONFLICT,
+            "SIMULATOR_FAULT_OVERLAP",
+            "reset or repair overlapping active simulated faults before running this scenario",
+            retryable=False,
+        )
+    except (InvalidSimulatorSpanError, InvalidSimulatorNoiseError):
+        return error_response(
+            status.HTTP_409_CONFLICT,
+            "INVALID_SIMULATOR_SCENARIO",
+            "the generated scenario no longer matches the active simulator network",
+            retryable=False,
+        )
+    except (MissingSimulatorDeviceError, NoSimulatorTelemetryError):
+        return error_response(
+            status.HTTP_409_CONFLICT,
+            "SIMULATOR_SCENARIO_UNAVAILABLE",
+            "the scenario has no eligible simulator telemetry source",
+            retryable=False,
+        )
+    except SimulatorTelemetryUnavailableError:
+        return simulator_unavailable(
+            "SIMULATOR_TELEMETRY_UNAVAILABLE",
+            "scenario telemetry could not enter the public ingestion endpoint",
+        )
+    except (SimulatorDatasetNotFoundError, SimulatorStoreUnavailableError):
+        return simulator_unavailable(
+            "SIMULATOR_STORE_UNAVAILABLE",
+            "simulator state is temporarily unavailable",
+        )
+    return SimulatorScenarioRunResponse.model_validate(result)
+
+
 @router.post(
     "/faults",
     response_model=SimulatedFaultResponse,
@@ -90,6 +171,9 @@ async def inject_fault(
             feeder_id=payload.feeder_id,
             missing_device_pole_ids=tuple(payload.missing_device_pole_ids),
             omit_loss_pole_ids=tuple(payload.omit_loss_pole_ids),
+            duplicate_loss_pole_ids=tuple(payload.duplicate_loss_pole_ids),
+            delayed_loss_pole_ids=tuple(payload.delayed_loss_pole_ids),
+            out_of_order_pole_ids=tuple(payload.out_of_order_pole_ids),
         )
     except ActiveSimulatorFaultError:
         return error_response(
@@ -144,9 +228,20 @@ async def inject_fault(
     response_model=SimulatedFaultResponse,
     responses=ERROR_RESPONSES,
 )
-async def repair_fault(fault_id: UUID, request: Request) -> SimulatedFaultResponse | JSONResponse:
+async def repair_fault(
+    fault_id: UUID,
+    request: Request,
+    payload: RepairSimulatedFaultRequest | None = None,
+) -> SimulatedFaultResponse | JSONResponse:
     try:
-        fault = await simulator_service(request).repair_fault(fault_id)
+        existing_fault = await simulator_service(request).get_fault(fault_id)
+        await request.app.state.incident_service.claim_simulator_repairs_for_poles(
+            existing_fault.deenergized_pole_ids
+        )
+        fault = await simulator_service(request).repair_fault(
+            fault_id,
+            restoration_fraction=payload.restoration_fraction if payload is not None else 1.0,
+        )
     except SimulatorFaultNotFoundError:
         return error_response(
             status.HTTP_404_NOT_FOUND,
@@ -170,6 +265,11 @@ async def repair_fault(fault_id: UUID, request: Request) -> SimulatedFaultRespon
         return simulator_unavailable(
             "SIMULATOR_STORE_UNAVAILABLE",
             "simulator state is temporarily unavailable",
+        )
+    except IncidentStoreUnavailableError:
+        return simulator_unavailable(
+            "INCIDENT_STORE_UNAVAILABLE",
+            "ticket repair workflow is temporarily unavailable",
         )
     return SimulatedFaultResponse.model_validate(fault)
 

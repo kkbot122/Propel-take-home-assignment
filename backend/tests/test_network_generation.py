@@ -147,6 +147,16 @@ def test_noisy_telemetry_respects_bindings_silence_and_sequence_rules() -> None:
     }
     assert loss_poles.isdisjoint(silent_poles)
 
+    report_capable_affected = {
+        device.pole_id
+        for device in network.devices
+        if device.health_status == DeviceHealthStatus.HEALTHY
+        and device.can_report_power_loss
+        and next(pole for pole in network.poles if pole.pole_id == device.pole_id).dt_id
+        == dt_scenario.faults[0].dt_id
+    }
+    assert len(loss_poles) / len(report_capable_affected) == pytest.approx(0.70, abs=0.08)
+
 
 def test_fixed_scenarios_cover_faults_uncertainty_and_restoration() -> None:
     network = generate_network()
@@ -159,7 +169,8 @@ def test_fixed_scenarios_cover_faults_uncertainty_and_restoration() -> None:
         SimulatorFaultType.FEEDER_FAULT,
     }
     assert scenarios["scheduled-span"].scheduled
-    assert len(scenarios["simultaneous-spans"].faults) == 2
+    assert len(scenarios["simultaneous-spans"].faults) == 3
+    assert scenarios["dead-sensor"].faults == ()
     surveyed_dt = scenarios["surveyed-span"].faults[0].dt_id
     inferred_dt = scenarios["inferred-span"].faults[0].dt_id
     transformer_by_id = {item.dt_id: item for item in network.transformers}

@@ -490,6 +490,57 @@ button:disabled {
   gap: 0.55rem;
 }
 
+.scenario-picker {
+  display: grid;
+  gap: 0.2rem;
+  min-width: min(31rem, 48vw);
+}
+
+.scenario-picker span {
+  color: var(--muted);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scenario-picker select {
+  width: 100%;
+  min-height: 39px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid #b8c4bc;
+  border-radius: 4px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.scenario-picker select:focus-visible {
+  outline: 3px solid rgb(212 112 54 / 28%);
+  outline-offset: 2px;
+}
+
+.scenario-quick-actions {
+  flex-basis: 100%;
+  color: var(--green);
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-align: right;
+}
+
+.scenario-quick-actions summary {
+  cursor: pointer;
+}
+
+.scenario-quick-actions > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
 .scenario-actions button,
 .primary-action {
   min-height: 39px;

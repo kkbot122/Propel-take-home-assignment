@@ -160,6 +160,8 @@ in Railway service variables or reference variables, never in the repository.
 | `SIMULATOR_REQUEST_TIMEOUT_SECONDS` | `3` | Simulator HTTP timeout. |
 | `SIMULATOR_HEARTBEAT_INTERVAL_SECONDS` | `600` | Development heartbeat refresh period. |
 | `SIMULATOR_HEARTBEAT_BATCH_SIZE` | `500` | Development heartbeat batch bound. |
+| `SIMULATOR_POWER_LOSS_DELIVERY_RATIO` | `0.70` | Fraction of modern-device dying-message attempts that deterministically succeed. |
+| `SIMULATOR_POWER_LOSS_DELIVERY_SEED` | `287` | Stable seed for repeatable delivered/silent device selection. |
 | `SIMULATOR_ENABLED` | `true` | Local default; must be `false` in production. |
 | `SIMULATOR_GENERATED_NETWORK_ENABLED` | `true` | Seeds the deterministic subdivision registry. |
 | `SIMULATOR_GENERATION_SEED` | `7307` | Stable network generator seed. |

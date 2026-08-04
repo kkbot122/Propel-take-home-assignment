@@ -37,9 +37,17 @@ The central challenge is incomplete network topology:
 
   `detected → acknowledged → crew_assigned → resolved → verified → closed`
 
-* Reject manual resolution when telemetry still shows affected poles as dark.
+* Prevent a manual repair claim from verifying or closing while required poles remain dark.
 
 * Simulate faults, telemetry loss, duplicates, ordering issues, and restoration.
+
+Modern simulated devices deliver their one capacitor-backed `power_lost`
+attempt with a deterministic configurable 70% success rate; firmware-1.2 and
+independently offline devices remain silent. The evaluator-facing simulator gap
+completion checklist is
+[`docs/SIMULATOR-INCOMPLETE-DELIVERABLES.md`](docs/SIMULATOR-INCOMPLETE-DELIVERABLES.md),
+with the cold-run results in
+[`docs/SIMULATOR-ACCEPTANCE.md`](docs/SIMULATOR-ACCEPTANCE.md).
 
 ## Architecture at a glance
 
@@ -88,6 +96,14 @@ Default entry points:
 * Backend health check: `http://localhost:8000/health`
 * API documentation: `http://localhost:8000/docs`
 * Operational diagnostics: `http://localhost:3000/api/diagnostics/overview`
+
+For the reviewer simulator, open the operator console, select one of the nine
+**PB-07 field scenarios**, and choose **Run scenario**. Reset between cases.
+The catalogue is also available from:
+
+```bash
+curl http://localhost:8000/api/simulator/scenarios
+```
 
 The startup waits for PostgreSQL and Redis, runs the one-shot initializer, and
 then starts the API, telemetry worker, and Nginx-served frontend. Stop the stack
