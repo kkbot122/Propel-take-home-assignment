@@ -125,6 +125,28 @@ const corridorIncident: Incident = {
   },
 }
 
+const inferredIncident: Incident = {
+  ...incident,
+  incident_id: 'incident-inferred',
+  fingerprint: 'probable-span:DT-003:P-201->P-202',
+  suspected_asset_id: 'P-201->P-202',
+  affected_pole_ids: ['P-202', 'P-203', 'P-204'],
+  precision: 'PROBABLE_SPAN',
+  confidence_score: 76,
+  evidence: {
+    topology_source: 'INFERRED',
+    candidate: {
+      positive_reasons: ['inferred topology quality is 0.84'],
+      negative_reasons: [
+        'geographic topology is inferred and cannot support exact-span precision',
+      ],
+      topology_quality_score: 0.84,
+      topology_quality_tier: 'STRONGLY_INFERRED',
+      topology_quality_reasons: [],
+    },
+  },
+}
+
 const ticket: Ticket = {
   ticket_id: 'ticket-1',
   incident_id: 'incident-1',
@@ -165,7 +187,21 @@ const poles: NetworkPole[] = [
 const topology: NetworkTopology = {
   dt_id: 'DT-001',
   topology_version: 1,
-  spans: [{ parent_pole_id: null, child_pole_id: 'P-001', source: 'SURVEYED', edge_confidence: 1 }],
+  source: 'SURVEYED',
+  quality_score: 1,
+  quality_tier: 'SURVEYED',
+  quality_reasons: [],
+  inference_version: null,
+  spans: [
+    {
+      parent_pole_id: null,
+      child_pole_id: 'P-001',
+      source: 'SURVEYED',
+      edge_confidence: 1,
+      distance_m: 20,
+      inference_version: null,
+    },
+  ],
 }
 
 const networkOverview: NetworkOverview = {
@@ -191,6 +227,13 @@ const networkOverview: NetworkOverview = {
       name: 'Demo DT 2',
       latitude: 12.89005,
       longitude: 77.585,
+      pin_code: '560078',
+    },
+    {
+      dt_id: 'DT-003',
+      name: 'Demo DT 3',
+      latitude: 12.891,
+      longitude: 77.586,
       pin_code: '560078',
     },
   ],
@@ -223,6 +266,7 @@ function installFetchRouter(options?: {
     if (url === '/api/incidents/incident-1') return jsonResponse(incident)
     if (url === '/api/incidents/incident-2') return jsonResponse(secondIncident)
     if (url === '/api/incidents/incident-corridor') return jsonResponse(corridorIncident)
+    if (url === '/api/incidents/incident-inferred') return jsonResponse(inferredIncident)
     if (url === '/api/incidents/incident-suppressed') return jsonResponse(suppressedIncident)
     if (url === '/api/tickets/ticket-1' && init?.method !== 'POST') {
       return jsonResponse(options?.ticket ?? ticket)
@@ -252,6 +296,17 @@ function installFetchRouter(options?: {
     if (url === '/api/network/topology/DT-001') return jsonResponse(topology)
     if (url === '/api/network/topology/DT-002') {
       return jsonResponse({ ...topology, dt_id: 'DT-002', spans: [] })
+    }
+    if (url === '/api/network/topology/DT-003') {
+      return jsonResponse({
+        ...topology,
+        dt_id: 'DT-003',
+        source: 'INFERRED',
+        quality_score: 0.84,
+        quality_tier: 'STRONGLY_INFERRED',
+        inference_version: 'geo-mst-v1',
+        spans: [],
+      })
     }
     if (url === '/api/simulator/faults/fault-1/repair') {
       return jsonResponse({
@@ -336,7 +391,7 @@ describe('App', () => {
       screen.getByText('surveyed topology supports exact-span precision'),
     ).toBeInTheDocument()
     expect(screen.getByTestId('network-map')).toHaveTextContent('P-001->P-002')
-    expect(screen.getByTestId('network-map')).toHaveTextContent('FDR-001 · 2 DTs')
+    expect(screen.getByTestId('network-map')).toHaveTextContent('FDR-001 · 3 DTs')
     expect(await screen.findByRole('button', { name: 'Acknowledge incident' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: 'Assign crew' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Claim physical repair' })).not.toBeInTheDocument()
@@ -377,6 +432,7 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'No incident selected' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inject span fault A' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Inject span fault B' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Inject inferred span' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Inject corridor fault' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Inject DT fault' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Inject feeder fault' })).toBeEnabled()
@@ -394,6 +450,39 @@ describe('App', () => {
     expect(screen.getByText(/telemetry-consistency-rule/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Acknowledge incident' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inject span fault A' })).toBeEnabled()
+  })
+
+  it('labels inferred topology and withholds exact-span precision', async () => {
+    installFetchRouter({ incidents: [inferredIncident] })
+    renderApp()
+
+    expect(await screen.findByRole('heading', { name: 'P-201 → P-202' })).toBeInTheDocument()
+    expect(screen.getAllByText('PROBABLE SPAN')).toHaveLength(2)
+    expect(screen.getByText('Geographically inferred topology')).toBeInTheDocument()
+    expect(screen.getByText(/topology quality 84\/100/)).toBeInTheDocument()
+    expect(screen.getByText(/Exact-span precision is prohibited/)).toBeInTheDocument()
+  })
+
+  it('sends the inferred-span scenario through the simulator API', async () => {
+    const fetchMock = installFetchRouter({ incidents: [] })
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Inject inferred span' }))
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/simulator/faults',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            fault_type: 'SPAN_FAULT',
+            dt_id: 'DT-003',
+            parent_pole_id: 'P-201',
+            child_pole_id: 'P-202',
+          }),
+        }),
+      ),
+    )
   })
 
   it('sends the selected feeder-fault scenario through the simulator API', async () => {

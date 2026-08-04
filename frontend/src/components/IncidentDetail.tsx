@@ -47,6 +47,24 @@ function corridorEvidence(incident: Incident | null): {
     : null
 }
 
+function inferredTopologyEvidence(incident: Incident | null): {
+  score: number
+  tier: string
+  reasons: string[]
+} | null {
+  if (!incident || incident.evidence.topology_source !== 'INFERRED') return null
+  const candidate = incident.evidence.candidate
+  if (!isRecord(candidate)) return null
+  const score = candidate.topology_quality_score
+  const tier = candidate.topology_quality_tier
+  if (typeof score !== 'number' || typeof tier !== 'string') return null
+  return {
+    score,
+    tier,
+    reasons: stringList(candidate.topology_quality_reasons),
+  }
+}
+
 function statusLabel(status: TicketStatus): string {
   return status.replaceAll('_', ' ')
 }
@@ -71,6 +89,7 @@ export function IncidentDetail({
   const [crew, setCrew] = useState('Crew-7')
   const reasons = evidenceReasons(incident)
   const corridor = corridorEvidence(incident)
+  const inferredTopology = inferredTopologyEvidence(incident)
 
   function assignCrew(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -154,6 +173,22 @@ export function IncidentDetail({
           <strong>Exact span intentionally withheld</strong>
           <span>Bounded corridor: {corridor.orderedPoleIds.join(' → ')}</span>
           <small>Unusable observations: {corridor.skippedPoleIds.join(', ')}</small>
+        </div>
+      )}
+
+      {inferredTopology && (
+        <div className="precision-notice inferred" role="status">
+          <strong>Geographically inferred topology</strong>
+          <span>
+            {inferredTopology.tier.replaceAll('_', ' ')} · topology quality{' '}
+            {Math.round(inferredTopology.score * 100)}/100
+          </span>
+          <small>
+            Exact-span precision is prohibited.
+            {inferredTopology.reasons.length > 0
+              ? ` ${inferredTopology.reasons.join(' ')}`
+              : ''}
+          </small>
         </div>
       )}
 

@@ -71,12 +71,12 @@ async def test_schema_and_seed_are_complete_and_idempotent(database_engine: Asyn
     first_summary = await seed_database(database_engine)
     second_summary = await seed_database(database_engine)
     assert first_summary == second_summary
-    assert second_summary.transformers == 2
-    assert second_summary.poles == 6
-    assert second_summary.devices == 6
-    assert second_summary.bindings == 6
-    assert second_summary.topology_edges == 6
-    assert second_summary.live_pole_states == 6
+    assert second_summary.transformers == 3
+    assert second_summary.poles == 10
+    assert second_summary.devices == 10
+    assert second_summary.bindings == 10
+    assert second_summary.topology_edges == 10
+    assert second_summary.live_pole_states == 10
     assert second_summary.scheduled_outages == 1
 
     async with database_engine.connect() as connection:
@@ -118,6 +118,38 @@ async def test_schema_and_seed_are_complete_and_idempotent(database_engine: Asyn
         assert Counter(row.pole_id for row in rows) == Counter(
             {"P-001": 1, "P-002": 1, "P-003": 1, "P-004": 1}
         )
+
+        inferred_rows = (
+            await connection.execute(
+                select(
+                    Pole.pole_id,
+                    TopologyEdge.source,
+                    TopologyEdge.distance_m,
+                    TopologyEdge.edge_confidence,
+                    TopologyEdge.inference_version,
+                )
+                .join(TopologyEdge, TopologyEdge.child_pole_id == Pole.id)
+                .join(DistributionTransformer, TopologyEdge.dt_id == DistributionTransformer.id)
+                .where(DistributionTransformer.dt_id == "DT-003")
+                .order_by(Pole.pole_id)
+            )
+        ).all()
+        assert [row.pole_id for row in inferred_rows] == [
+            "P-201",
+            "P-202",
+            "P-203",
+            "P-204",
+        ]
+        assert all(row.source == TopologySource.INFERRED for row in inferred_rows)
+        assert all(row.distance_m > 0 for row in inferred_rows)
+        assert all(0 < row.edge_confidence < 1 for row in inferred_rows)
+        assert [row.edge_confidence for row in inferred_rows] == [
+            pytest.approx(0.7583),
+            pytest.approx(0.7583),
+            pytest.approx(0.7583),
+            pytest.approx(0.7606),
+        ]
+        assert {row.inference_version for row in inferred_rows} == {"geo-mst-v1"}
 
         pole_rows = (
             await connection.execute(

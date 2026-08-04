@@ -255,12 +255,14 @@ Not included:
 
 ## Current status
 
-VS-01 through VS-09 and PB-01 through PB-04 are complete. The tested system includes deterministic
+VS-01 through VS-09 and PB-01 through PB-05 are complete. The tested system includes deterministic
 startup, HTTP-to-Redis telemetry, idempotent Redis-to-PostgreSQL processing,
 surveyed-span localization, one-incident grouping, audited ticket workflow,
 telemetry-verified restoration, the operator console, and an isolated
 fresh-volume Playwright acceptance, false-positive suppression, and deterministic
 span/DT/feeder classification. Independent surveyed faults and missing-device
 corridors now preserve separate incidents while degrading precision honestly.
-Work resumes from PB-05 in `docs/POST-BACKBONE.md`; inferred topology, load
-measurement, deployment, and demo packaging remain to be built.
+Unknown-topology DTs now use a bounded deterministic geographic MST, persist edge
+provenance and quality, and localize with probable-span, corridor, or DT-level
+precision caps. Work resumes from PB-06 in `docs/POST-BACKBONE.md`; confidence
+calibration, reliability hardening, load measurement, deployment, and demo packaging remain.

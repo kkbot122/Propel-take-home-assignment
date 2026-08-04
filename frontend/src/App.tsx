@@ -262,7 +262,7 @@ export function App() {
           <div>
             <p className="section-label">Fixed demonstration</p>
             <h2 id="scenario-title">FDR-001 · classified outage scenarios</h2>
-            <p>Surveyed span, transformer-wide, and feeder-wide telemetry · PIN 560078</p>
+            <p>Surveyed and inferred span, transformer, and feeder telemetry · PIN 560078</p>
           </div>
         </div>
         <div className="scenario-actions">
@@ -314,6 +314,32 @@ export function App() {
             }
           >
             Inject span fault B
+          </button>
+          <button
+            type="button"
+            className="inject-button"
+            onClick={() => {
+              setSelectedIncidentId(null)
+              simulatorMutation.mutate({
+                action: 'inject',
+                request: {
+                  fault_type: 'SPAN_FAULT',
+                  dt_id: 'DT-003',
+                  parent_pole_id: 'P-201',
+                  child_pole_id: 'P-202',
+                },
+              })
+            }}
+            disabled={
+              operationPending ||
+              activeFaults.some((fault) =>
+                fault.deenergized_pole_ids.some((poleId) =>
+                  ['P-202', 'P-203', 'P-204'].includes(poleId),
+                ),
+              )
+            }
+          >
+            Inject inferred span
           </button>
           <button
             type="button"
@@ -426,7 +452,7 @@ export function App() {
         <section className="panel map-panel" aria-labelledby="map-title">
           <div className="panel-heading map-heading">
             <div>
-              <p className="section-label">Surveyed network · two topology snapshots</p>
+              <p className="section-label">Surveyed + inferred · three topology snapshots</p>
               <h2 id="map-title">FDR-001 network</h2>
             </div>
             <span className="map-focus-label">
@@ -453,7 +479,9 @@ export function App() {
           )}
           <div className="map-footer">
             <span>
-              {networkOverviewQuery.data?.transformers.length ?? 0} DTs · surveyed topology
+              {networkOverviewQuery.data?.transformers.length ?? 0} DTs ·{' '}
+              {topologyQuery.data?.filter((topology) => topology.source === 'INFERRED').length ?? 0}{' '}
+              inferred
             </span>
             <span>
               {polesQuery.data?.filter((pole) => pole.state === 'LIVE').length ?? 0}/
@@ -492,7 +520,7 @@ export function App() {
       </section>
 
       <footer className="app-footer">
-        <span>Propel · PB-04 honest corridor precision</span>
+        <span>Propel · PB-05 inferred topology</span>
         <span>Polling every 5 seconds · verification remains telemetry-only</span>
       </footer>
     </main>

@@ -113,7 +113,7 @@ The boxes represent logical components. The implementation may run several compo
 
 ### 5.1 Chosen implementation stack
 
-The backend is a Python 3.13 modular monolith built with FastAPI, Pydantic v2, SQLAlchemy 2.x, Psycopg 3, Alembic, and the asyncio Redis client from `redis-py`. NetworkX constructs and validates inferred trees; the localization and classification rules themselves are pure Python functions over immutable snapshots.
+The backend is a Python 3.13 modular monolith built with FastAPI, Pydantic v2, SQLAlchemy 2.x, Psycopg 3, Alembic, and the asyncio Redis client from `redis-py`. A small pure-Python Kruskal implementation constructs inferred trees; localization and classification remain pure functions over immutable snapshots.
 
 The operator console is a React 19 and TypeScript single-page application built with Vite. TanStack Query owns server state and polls every five seconds. React Leaflet renders the network and incidents over a configurable OpenStreetMap tile layer. Polling is intentionally preferred to WebSockets for the MVP because it is operationally simpler and comfortably inside the 120-second product target.
 
@@ -223,7 +223,7 @@ Each stored edge records its provenance:
 * `SURVEYED` — directly supplied by the registry
 * `INFERRED` — generated from geography
 
-Each inferred edge includes a confidence score. If no defensible graph can be produced, the DT topology is marked unavailable or unusable and no artificial `UNKNOWN` edge is stored. This allows the same localization engine to operate on recorded and inferred topology while preserving uncertainty.
+The worker resolves both sources through one immutable topology-provider contract. Surveyed edges take precedence. When no surveyed tree exists, the inferred provider validates coordinates, generates at most six nearby candidates per asset inside a 120-metre grid neighbourhood, chooses a deterministic minimum spanning tree including the DT root, and orients it away from the transformer. Each inferred edge includes Haversine distance, a distance-and-ambiguity score, and inference version `geo-mst-v1`; the aggregate score combines mean and weakest-edge quality. If no connected tree can be produced, the DT is marked unusable and no artificial `UNKNOWN` edge is stored. The same localization engine therefore operates on both sources while preserving uncertainty.
 
 ### 6.6 Fault Localization Processor
 
@@ -593,11 +593,11 @@ The first implementation builds a constrained geographic tree rooted at the tran
 
 1. Group poles by `dt_id`.
 2. Use the transformer as the root.
-3. Generate plausible edges between geographically nearby assets.
-4. Prefer a parent that is closer to the transformer than its child.
-5. Penalize unusually long spans, crossings, sharp reversals, and implausible branching.
-6. Select a low-cost connected tree.
-7. Store every generated edge as `INFERRED` with a confidence value and inference version.
+3. Place assets in bounded geographic cells and retain at most six neighbours within 120 metres per asset.
+4. Score edges by Haversine distance and penalize nearly equal alternatives.
+5. Select a deterministic minimum spanning tree including the transformer root.
+6. Orient the tree away from the transformer and validate one parent per pole, connectivity, and acyclicity.
+7. Store every generated edge as `INFERRED` with distance, confidence, and inference version.
 
 This graph is an estimate, not a surveyed truth.
 

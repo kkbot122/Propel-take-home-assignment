@@ -32,6 +32,11 @@ def incident_fingerprint(candidate: FaultCandidate) -> str:
             return (
                 f"corridor:{candidate.dt_id}:{candidate.parent_pole_id}..{candidate.child_pole_id}"
             )
+        if candidate.precision == LocalizationPrecision.PROBABLE_SPAN:
+            return (
+                f"probable-span:{candidate.dt_id}:"
+                f"{candidate.parent_pole_id}->{candidate.child_pole_id}"
+            )
         return f"span:{candidate.dt_id}:{candidate.parent_pole_id}->{candidate.child_pole_id}"
     if candidate.classification == FaultClass.DT_FAULT:
         return f"dt:{candidate.dt_id}"

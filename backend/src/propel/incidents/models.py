@@ -93,12 +93,19 @@ class NetworkSpanView:
     child_pole_id: str
     source: TopologySource
     edge_confidence: float
+    distance_m: float
+    inference_version: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class NetworkTopologyView:
     dt_id: str
     topology_version: int
+    source: TopologySource | None
+    quality_score: float
+    quality_tier: str
+    quality_reasons: tuple[str, ...]
+    inference_version: str | None
     spans: tuple[NetworkSpanView, ...]
 
 

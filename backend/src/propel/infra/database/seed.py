@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -23,6 +23,8 @@ from propel.infra.database.models import (
     Substation,
     TopologyEdge,
 )
+from propel.topology.inference import infer_geographic_topology
+from propel.topology.models import TopologyPole, TopologyRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +54,7 @@ async def seed_database(engine: AsyncEngine) -> SeedSummary:
 
 async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
     seeded_at = datetime.now(UTC)
+    binding_valid_from = datetime(2020, 1, 1, tzinfo=UTC)
 
     await session.execute(
         insert(Substation)
@@ -82,6 +85,7 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
     transformer_specs = (
         ("DT-001", "JP Nagar DT 1", 12.889100, 77.584000),
         ("DT-002", "JP Nagar DT 2", 12.890050, 77.585000),
+        ("DT-003", "JP Nagar DT 3", 12.891000, 77.586000),
     )
     for external_id, name, latitude, longitude in transformer_specs:
         await session.execute(
@@ -116,6 +120,10 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
         ("P-004", "DT-001", 12.889790, 77.584540),
         ("P-101", "DT-002", 12.890220, 77.585140),
         ("P-102", "DT-002", 12.890400, 77.585300),
+        ("P-201", "DT-003", 12.891180, 77.586000),
+        ("P-202", "DT-003", 12.891360, 77.586000),
+        ("P-203", "DT-003", 12.891540, 77.586000),
+        ("P-204", "DT-003", 12.891360, 77.586180),
     )
     for external_id, transformer_external_id, latitude, longitude in pole_specs:
         await session.execute(
@@ -169,8 +177,17 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
         device_id = devices[f"DEV-{pole_external_id}"]
         await session.execute(
             insert(DeviceBinding)
-            .values(device_id=device_id, pole_id=pole_id, valid_from=seeded_at)
+            .values(device_id=device_id, pole_id=pole_id, valid_from=binding_valid_from)
             .on_conflict_do_nothing()
+        )
+        await session.execute(
+            update(DeviceBinding)
+            .where(
+                DeviceBinding.device_id == device_id,
+                DeviceBinding.pole_id == pole_id,
+                DeviceBinding.valid_to.is_(None),
+            )
+            .values(valid_from=binding_valid_from)
         )
         await session.execute(
             insert(PoleState)
@@ -215,6 +232,45 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
                 topology_version=1,
             )
             .on_conflict_do_nothing(constraint="uq_topology_edges_child_version")
+        )
+
+    inferred_topology = infer_geographic_topology(
+        TopologyRequest(
+            dt_id="DT-003",
+            dt_latitude=transformer_specs[2][2],
+            dt_longitude=transformer_specs[2][3],
+            topology_version=1,
+            poles=tuple(
+                TopologyPole(pole_id, latitude, longitude)
+                for pole_id, transformer_id, latitude, longitude in pole_specs
+                if transformer_id == "DT-003"
+            ),
+        )
+    )
+    if not inferred_topology.edges:
+        raise RuntimeError("deterministic inferred topology fixture is unusable")
+    for edge in inferred_topology.edges:
+        inferred_edge_insert = insert(TopologyEdge).values(
+            dt_id=transformers["DT-003"],
+            parent_pole_id=(poles[edge.parent_pole_id] if edge.parent_pole_id else None),
+            child_pole_id=poles[edge.child_pole_id],
+            source=edge.source,
+            distance_m=edge.distance_m,
+            edge_confidence=edge.edge_confidence,
+            inference_version=edge.inference_version,
+            topology_version=inferred_topology.topology_version,
+        )
+        await session.execute(
+            inferred_edge_insert.on_conflict_do_update(
+                constraint="uq_topology_edges_child_version",
+                set_={
+                    "parent_pole_id": inferred_edge_insert.excluded.parent_pole_id,
+                    "distance_m": inferred_edge_insert.excluded.distance_m,
+                    "edge_confidence": inferred_edge_insert.excluded.edge_confidence,
+                    "inference_version": inferred_edge_insert.excluded.inference_version,
+                },
+                where=TopologyEdge.source == TopologySource.INFERRED,
+            )
         )
 
     await session.execute(

@@ -17,6 +17,7 @@ from propel.domain.enums import (
     PoleStatus,
     SuspectedAssetType,
     TicketStatus,
+    TopologySource,
 )
 from propel.incidents.models import (
     IncidentTicketReference,
@@ -809,7 +810,9 @@ class PostgresIncidentService:
                             parent.pole_id.label("parent_pole_id"),
                             child.pole_id.label("child_pole_id"),
                             TopologyEdge.source,
+                            TopologyEdge.distance_m,
                             TopologyEdge.edge_confidence,
+                            TopologyEdge.inference_version,
                         )
                         .select_from(TopologyEdge)
                         .outerjoin(parent, parent.id == TopologyEdge.parent_pole_id)
@@ -823,15 +826,48 @@ class PostgresIncidentService:
                 ).all()
         except SQLAlchemyError as error:
             raise IncidentStoreUnavailableError from error
+        source = rows[0].source if rows else None
+        confidences = tuple(row.edge_confidence for row in rows)
+        if source == TopologySource.SURVEYED:
+            quality_score = 1.0
+            quality_tier = "SURVEYED"
+            quality_reasons: tuple[str, ...] = ()
+        elif confidences:
+            quality_score = round(
+                0.6 * (sum(confidences) / len(confidences)) + 0.4 * min(confidences),
+                4,
+            )
+            quality_tier = "STRONGLY_INFERRED" if quality_score >= 0.7 else "WEAKLY_INFERRED"
+            quality_reasons = (
+                "surveyed connectivity is unavailable; topology is inferred from geography",
+            )
+            if quality_tier == "WEAKLY_INFERRED":
+                quality_reasons += ("one or more inferred edges have weak geographic separation",)
+        else:
+            quality_score = 0.0
+            quality_tier = "UNUSABLE"
+            quality_reasons = ("no usable topology edges are recorded",)
+        inference_versions = {
+            row.inference_version for row in rows if row.inference_version is not None
+        }
         return NetworkTopologyView(
             dt_id=dt_id,
             topology_version=topology_version,
+            source=source,
+            quality_score=quality_score,
+            quality_tier=quality_tier,
+            quality_reasons=quality_reasons,
+            inference_version=(
+                next(iter(inference_versions)) if len(inference_versions) == 1 else None
+            ),
             spans=tuple(
                 NetworkSpanView(
                     parent_pole_id=row.parent_pole_id,
                     child_pole_id=row.child_pole_id,
                     source=row.source,
                     edge_confidence=row.edge_confidence,
+                    distance_m=row.distance_m,
+                    inference_version=row.inference_version,
                 )
                 for row in rows
             ),

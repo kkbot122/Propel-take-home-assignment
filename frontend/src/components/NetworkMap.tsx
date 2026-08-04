@@ -110,7 +110,8 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
   )
   const selectedSpan =
     selectedIncident?.suspected_asset_type === 'SPAN' &&
-    selectedIncident.precision === 'EXACT_SPAN'
+    (selectedIncident.precision === 'EXACT_SPAN' ||
+      selectedIncident.precision === 'PROBABLE_SPAN')
       ? selectedIncident.suspected_asset_id.split('->')
       : []
   const selectedCorridorPoleIds = corridorPoleIds(selectedIncident)
@@ -194,6 +195,7 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
           if (!parent || !child) return null
           const selected =
             selectedSpan[0] === span.parent_pole_id && selectedSpan[1] === span.child_pole_id
+          const inferred = span.source === 'INFERRED'
           return (
             <Polyline
               key={`${span.parent_pole_id}-${span.child_pole_id}`}
@@ -202,13 +204,15 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
                 [child.latitude, child.longitude],
               ]}
               pathOptions={{
-                color: selected ? '#e75f3b' : '#446a5b',
+                color: selected ? '#e75f3b' : inferred ? '#3979a8' : '#446a5b',
                 weight: selected ? 7 : 4,
-                opacity: selected ? 1 : 0.72,
+                opacity: selected ? 1 : inferred ? 0.88 : 0.72,
+                dashArray: inferred ? (selected ? '8 5' : '6 6') : undefined,
               }}
             >
               <Tooltip>
-                {span.parent_pole_id ?? topology.dt_id} → {span.child_pole_id} · {span.source}
+                {span.parent_pole_id ?? topology.dt_id} → {span.child_pole_id} · {span.source} ·{' '}
+                {(span.edge_confidence * 100).toFixed(0)}% edge score
               </Tooltip>
             </Polyline>
           )
@@ -336,6 +340,10 @@ export function NetworkMap({ poles, topologies, overview, selectedIncident }: Ne
         <li>
           <span className="legend-dt" aria-hidden="true" />
           DT
+        </li>
+        <li>
+          <span className="legend-inferred" aria-hidden="true" />
+          INFERRED
         </li>
         {(['LIVE', 'DARK', 'STALE', 'UNKNOWN'] as PoleStatus[]).map((state) => (
           <li key={state}>

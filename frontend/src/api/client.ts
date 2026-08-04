@@ -55,12 +55,14 @@ export const api = {
       await Promise.all([
         requestJson<NetworkPole[]>('/api/network/poles?dt_id=DT-001'),
         requestJson<NetworkPole[]>('/api/network/poles?dt_id=DT-002'),
+        requestJson<NetworkPole[]>('/api/network/poles?dt_id=DT-003'),
       ])
     ).flat(),
   topologies: () =>
     Promise.all([
       requestJson<NetworkTopology>('/api/network/topology/DT-001'),
       requestJson<NetworkTopology>('/api/network/topology/DT-002'),
+      requestJson<NetworkTopology>('/api/network/topology/DT-003'),
     ]),
   networkOverview: () =>
     requestJson<NetworkOverview>('/api/network/overview/FDR-001'),

@@ -2,6 +2,7 @@ import json
 import logging
 from collections import defaultdict
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -32,6 +33,8 @@ from propel.infra.database.models import (
     ScheduledOutage,
     TopologyEdge,
 )
+from propel.topology.models import RecordedTopologyEdge, TopologyPole, TopologyRequest
+from propel.topology.providers import CompositeTopologyProvider, TopologyProvider
 
 logger = logging.getLogger(__name__)
 SCHEDULE_LOAD_HORIZON = timedelta(days=1)
@@ -151,7 +154,9 @@ class PostgresDtSnapshotRepository:
                             parent.pole_id.label("parent_pole_id"),
                             child.pole_id.label("child_pole_id"),
                             TopologyEdge.source,
+                            TopologyEdge.distance_m,
                             TopologyEdge.edge_confidence,
+                            TopologyEdge.inference_version,
                         )
                         .select_from(TopologyEdge)
                         .join(
@@ -198,6 +203,8 @@ class PostgresDtSnapshotRepository:
                             child_pole_id=row.child_pole_id,
                             source=row.source,
                             edge_confidence=row.edge_confidence,
+                            distance_m=row.distance_m,
+                            inference_version=row.inference_version,
                         )
                     )
 
@@ -328,6 +335,7 @@ class RedisAnalysisScheduler:
         schedule_early_grace_seconds: float = 600,
         schedule_overrun_grace_seconds: float = 2_400,
         candidate_sink: FaultCandidateSink | None = None,
+        topology_provider: TopologyProvider | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._redis = redis_client
@@ -343,6 +351,7 @@ class RedisAnalysisScheduler:
         self._correlation_window_seconds = correlation_window_seconds
         self._retry_delay_seconds = retry_delay_seconds
         self._candidate_sink = candidate_sink
+        self._topology_provider = topology_provider or CompositeTopologyProvider()
         self._clock = clock or (lambda: datetime.now(UTC))
         self._claim_script = redis_client.register_script(CLAIM_DUE_SCRIPT)
 
@@ -357,6 +366,7 @@ class RedisAnalysisScheduler:
         dt_id = str(claimed[0])
         try:
             snapshot = await self._snapshot_repository.load(dt_id)
+            snapshot = self._resolve_topology(snapshot)
             candidates = localize_known_topology(
                 snapshot,
                 live_freshness=self._live_freshness,
@@ -387,6 +397,50 @@ class RedisAnalysisScheduler:
 
         self._log_result(snapshot, candidates)
         return candidates
+
+    def _resolve_topology(self, snapshot: NetworkSnapshot) -> NetworkSnapshot:
+        topology = self._topology_provider.provide(
+            TopologyRequest(
+                dt_id=snapshot.dt_id,
+                dt_latitude=snapshot.dt_latitude,
+                dt_longitude=snapshot.dt_longitude,
+                topology_version=max(1, snapshot.topology_version),
+                poles=tuple(
+                    TopologyPole(pole.pole_id, pole.latitude, pole.longitude)
+                    for pole in snapshot.poles
+                ),
+                recorded_edges=tuple(
+                    RecordedTopologyEdge(
+                        parent_pole_id=span.parent_pole_id,
+                        child_pole_id=span.child_pole_id,
+                        source=span.source,
+                        distance_m=span.distance_m,
+                        edge_confidence=span.edge_confidence,
+                        inference_version=span.inference_version,
+                    )
+                    for span in snapshot.spans
+                ),
+            )
+        )
+        return replace(
+            snapshot,
+            topology_version=topology.topology_version,
+            spans=tuple(
+                TopologySpan(
+                    parent_pole_id=edge.parent_pole_id,
+                    child_pole_id=edge.child_pole_id,
+                    source=edge.source,
+                    edge_confidence=edge.edge_confidence,
+                    distance_m=edge.distance_m,
+                    inference_version=edge.inference_version,
+                )
+                for edge in topology.edges
+            ),
+            topology_quality_score=topology.quality.score,
+            topology_quality_tier=topology.quality.tier.value,
+            topology_quality_reasons=topology.quality.limiting_factors,
+            inference_version=topology.inference_version,
+        )
 
     @staticmethod
     def _log_result(snapshot: NetworkSnapshot, candidates: list[FaultCandidate]) -> None:

@@ -205,7 +205,7 @@ Meaningful pole-state changes place the affected DT in a debounced Redis sorted 
 
 **Chosen:** Store one directed, rooted tree per DT. A topology edge has source `SURVEYED` or `INFERRED`; unavailable topology is represented by no usable edge set plus a DT-level quality status, not by fake `UNKNOWN` edges.
 
-For missing topology, generate geographically plausible candidate edges inside one DT, reject implausibly long candidates using measurements from surveyed DTs, build a minimum spanning tree including the transformer root, then orient it away from the transformer. Store the inference version, per-edge score, and aggregate topology quality.
+For missing topology, generate geographically plausible candidate edges inside one DT using bounded grid neighbourhoods. Version `geo-mst-v1` retains at most six neighbours per asset within 120 metres, scores Haversine distance plus near-equal-neighbour ambiguity, runs deterministic Kruskal selection including the transformer root, and orients the result with a stable breadth-first traversal. Store the inference version, distance, per-edge score, and aggregate topology quality. Surveyed edges always take precedence through the same immutable provider contract.
 
 Precision is constrained by provenance:
 
@@ -217,7 +217,7 @@ Precision is constrained by provenance:
 
 **Rejected:** Nearest-pole chaining, silently treating inferred edges as truth, and using an LLM to infer or localize the network.
 
-**Known limitation:** A geographic MST can connect parallel streets or electrically unrelated nearby branches. The simulator will measure exact-edge accuracy and corridor containment against hidden ground truth. Weak evidence must reduce precision instead of being hidden behind a confidence percentage.
+**Known limitation:** A geographic MST can connect parallel streets or electrically unrelated nearby branches. The fixed PB-05 evaluation measures exact-edge accuracy and corridor containment against test-only hidden ground truth. Version 1 does not use road geometry, conductor geometry, or learned outage history. Weak evidence reduces precision instead of being hidden behind a confidence percentage.
 
 ## 2026-08-03 — Normalize device bindings and keep topology roots relational
 

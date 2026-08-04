@@ -743,6 +743,18 @@ button:disabled {
   background: #f2ebf8;
 }
 
+.precision-notice.inferred {
+  border-color: #a9c8de;
+  border-left-color: #3979a8;
+  color: #275774;
+  background: #eaf4fa;
+}
+
+.legend-inferred {
+  border: 2px dashed #3979a8 !important;
+  background: transparent !important;
+}
+
 .evidence-section,
 .workflow-section {
   padding: 1rem;

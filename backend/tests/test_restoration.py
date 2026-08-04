@@ -42,9 +42,7 @@ def test_corridor_restoration_uses_persisted_downstream_bound() -> None:
         }
     }
 
-    assert (
-        required_span_restoration_pole_id("P-001..P-003", incident_evidence) == "P-003"
-    )
+    assert required_span_restoration_pole_id("P-001..P-003", incident_evidence) == "P-003"
     assert required_span_restoration_pole_id("P-001->P-002", {}) == "P-002"
 
 

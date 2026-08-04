@@ -43,6 +43,8 @@ class _BoundaryLocalization:
     upstream_pole_id: str
     downstream_pole_id: str
     subtree_root_pole_id: str
+    source: TopologySource
+    edge_confidence: float
     corridor: LocalizationCorridor | None = None
 
 
@@ -59,7 +61,7 @@ def localize_known_topology(
     correlation_window_seconds: float = CORRELATION_WINDOW_SECONDS,
 ) -> list[FaultCandidate]:
     poles = _pole_index(snapshot)
-    spans = tuple(span for span in snapshot.spans if span.source == TopologySource.SURVEYED)
+    spans = snapshot.spans
     children = _build_children(poles, spans)
     transformers = _snapshot_transformers(snapshot)
     raw_dt_candidates = tuple(
@@ -142,10 +144,24 @@ def _build_span_candidates(
     schedule_early_grace: timedelta,
     schedule_overrun_grace: timedelta,
 ) -> list[FaultCandidate]:
+    topology_source = _snapshot_topology_source(snapshot)
+    if topology_source == TopologySource.INFERRED and snapshot.topology_quality_score < 0.7:
+        dark_ids = tuple(
+            pole.pole_id
+            for pole in sorted(poles.values(), key=lambda item: item.pole_id)
+            if _is_credible_dark(pole, snapshot, live_freshness)
+        )
+        return (
+            [_build_degraded_dt_candidate(snapshot, poles, dark_ids, live_freshness)]
+            if dark_ids
+            else []
+        )
+
     candidates: list[FaultCandidate] = []
     boundaries: list[_BoundaryLocalization] = []
     subtrees: dict[str, tuple[str, ...]] = {}
     parent_by_child = {span.child_pole_id: span.parent_pole_id for span in spans}
+    span_by_child = {span.child_pole_id: span for span in spans}
     for child in sorted(poles.values(), key=lambda item: item.pole_id):
         if not _is_credible_dark(child, snapshot, live_freshness):
             continue
@@ -156,7 +172,14 @@ def _build_span_candidates(
         if _is_credible_dark(parent, snapshot, live_freshness):
             continue
         if _is_recent_live(parent, snapshot, live_freshness):
-            boundary = _BoundaryLocalization(parent.pole_id, child.pole_id, child.pole_id)
+            span = span_by_child[child.pole_id]
+            boundary = _BoundaryLocalization(
+                parent.pole_id,
+                child.pole_id,
+                child.pole_id,
+                span.source,
+                span.edge_confidence,
+            )
         else:
             boundary = _find_corridor_boundary(
                 child,
@@ -164,6 +187,7 @@ def _build_span_candidates(
                 parent_by_child,
                 snapshot,
                 live_freshness,
+                topology_source,
             )
             if boundary is None:
                 continue
@@ -203,8 +227,8 @@ def _build_span_candidates(
                 TopologySpan(
                     boundary.upstream_pole_id,
                     boundary.downstream_pole_id,
-                    TopologySource.SURVEYED,
-                    1.0,
+                    boundary.source,
+                    boundary.edge_confidence,
                 ),
                 poles,
                 subtree_ids,
@@ -250,6 +274,7 @@ def _find_corridor_boundary(
     parent_by_child: dict[str, str | None],
     snapshot: NetworkSnapshot,
     live_freshness: timedelta,
+    topology_source: TopologySource,
 ) -> _BoundaryLocalization | None:
     skipped_downstream_to_upstream: list[str] = []
     parent_id = parent_by_child.get(downstream.pole_id)
@@ -271,6 +296,8 @@ def _find_corridor_boundary(
                 upstream_pole_id=parent.pole_id,
                 downstream_pole_id=downstream.pole_id,
                 subtree_root_pole_id=downstream.pole_id,
+                source=topology_source,
+                edge_confidence=0,
                 corridor=corridor,
             )
         skipped_downstream_to_upstream.append(parent.pole_id)
@@ -305,10 +332,8 @@ def _build_dt_candidate(
     dt_min_branches: int,
 ) -> FaultCandidate | None:
     poles = {pole.pole_id: pole for pole in transformer.poles}
-    surveyed_spans = tuple(
-        span for span in transformer.spans if span.source == TopologySource.SURVEYED
-    )
-    children = _build_children(poles, surveyed_spans)
+    topology_spans = transformer.spans
+    children = _build_children(poles, topology_spans)
     observable = tuple(
         pole
         for pole in transformer.poles
@@ -319,7 +344,7 @@ def _build_dt_candidate(
         return None
 
     root_ids = tuple(
-        sorted(span.child_pole_id for span in surveyed_spans if span.parent_pole_id is None)
+        sorted(span.child_pole_id for span in topology_spans if span.parent_pole_id is None)
     )
     if not root_ids or any(poles[root_id].state != PoleStatus.DARK for root_id in root_ids):
         return None
@@ -369,7 +394,7 @@ def _build_dt_candidate(
     affected_ids = tuple(sorted(pole.pole_id for pole in dark))
     positive_reasons = (
         f"{len(dark)}/{len(observable)} recently healthy observable poles are DARK",
-        f"dark evidence covers {len(affected_branches)} surveyed root branches",
+        f"dark evidence covers {len(affected_branches)} rooted topology branches",
         "no lower live-to-dark span boundary explains loss of the transformer root",
     )
     negative_reasons = (
@@ -390,7 +415,7 @@ def _build_dt_candidate(
         child_pole_id=None,
         affected_pole_ids=affected_ids,
         precision=LocalizationPrecision.DT_LEVEL,
-        topology_source=TopologySource.SURVEYED,
+        topology_source=(topology_spans[0].source if topology_spans else TopologySource.SURVEYED),
         latitude=transformer.latitude,
         longitude=transformer.longitude,
         pin_code=transformer.pin_code,
@@ -486,7 +511,13 @@ def _build_feeder_candidate(
         child_pole_id=None,
         affected_pole_ids=affected_pole_ids,
         precision=LocalizationPrecision.FEEDER_LEVEL,
-        topology_source=TopologySource.SURVEYED,
+        topology_source=(
+            TopologySource.INFERRED
+            if any(
+                candidate.topology_source == TopologySource.INFERRED for candidate in dt_candidates
+            )
+            else TopologySource.SURVEYED
+        ),
         latitude=latitude,
         longitude=longitude,
         pin_code=pin_codes[0] if len(pin_codes) == 1 else None,
@@ -788,7 +819,14 @@ def _build_candidate(
     affected_ids = tuple(sorted(pole.pole_id for pole in dark))
     spread = _dark_observation_spread(dark)
     components = _confidence_components(observable, dark, contradictions, spread)
-    score = max(0, min(100, sum(components.as_dict().values())))
+    if boundary.source == TopologySource.INFERRED:
+        components = replace(
+            components,
+            topology=round(25 * snapshot.topology_quality_score),
+            boundary_clarity=20,
+        )
+    score_cap = 100 if boundary.source == TopologySource.SURVEYED else 79
+    score = max(0, min(score_cap, sum(components.as_dict().values())))
     positive_reasons, negative_reasons = _confidence_reasons(
         parent,
         child,
@@ -798,9 +836,23 @@ def _build_candidate(
         pre_onset_live,
         spread,
     )
+    if boundary.source == TopologySource.INFERRED:
+        positive_reasons = (
+            f"inferred topology quality is {snapshot.topology_quality_score:.2f}",
+            *tuple(
+                reason
+                for reason in positive_reasons
+                if reason != "surveyed topology supports exact-span precision"
+            ),
+        )
+        negative_reasons += (
+            "geographic topology is inferred and cannot support exact-span precision",
+            *snapshot.topology_quality_reasons,
+        )
     confidence_level = "HIGH" if score >= 80 else "MEDIUM" if score >= 50 else "LOW"
+    provenance_label = "Surveyed" if boundary.source == TopologySource.SURVEYED else "Inferred"
     confidence_reason = (
-        f"Surveyed live-to-dark boundary with {len(dark)}/{len(observable)} "
+        f"{provenance_label} live-to-dark boundary with {len(dark)}/{len(observable)} "
         f"dark observable poles and {len(contradictions)} post-onset live contradictions."
     )
 
@@ -816,8 +868,12 @@ def _build_candidate(
         parent_pole_id=parent.pole_id,
         child_pole_id=child.pole_id,
         affected_pole_ids=affected_ids,
-        precision=LocalizationPrecision.EXACT_SPAN,
-        topology_source=TopologySource.SURVEYED,
+        precision=(
+            LocalizationPrecision.EXACT_SPAN
+            if boundary.source == TopologySource.SURVEYED
+            else LocalizationPrecision.PROBABLE_SPAN
+        ),
+        topology_source=boundary.source,
         latitude=(parent.latitude + child.latitude) / 2,
         longitude=(parent.longitude + child.longitude) / 2,
         pin_code=child.pin_code or parent.pin_code,
@@ -835,6 +891,9 @@ def _build_candidate(
             positive_reasons=positive_reasons,
             negative_reasons=negative_reasons,
             components=components,
+            topology_quality_score=snapshot.topology_quality_score,
+            topology_quality_tier=snapshot.topology_quality_tier,
+            topology_quality_reasons=snapshot.topology_quality_reasons,
         ),
     )
 
@@ -893,16 +952,23 @@ def _build_corridor_candidate(
         )
     )
     spread = _dark_observation_spread(dark)
+    topology_source = _snapshot_topology_source(snapshot)
     components = replace(
         _confidence_components(observable, dark, contradictions, spread),
+        topology=round(25 * snapshot.topology_quality_score),
         boundary_clarity=15,
     )
     score = min(79, max(0, sum(components.as_dict().values())))
     affected_ids = tuple(sorted(pole.pole_id for pole in dark))
     negative_reasons = (
-        "unusable state evidence prevents an exact surveyed-span claim: "
+        "unusable state evidence prevents an exact span claim: "
         + ", ".join(corridor.skipped_pole_ids),
     )
+    if topology_source == TopologySource.INFERRED:
+        negative_reasons += (
+            "geographic topology is inferred and cannot support exact-span precision",
+            *snapshot.topology_quality_reasons,
+        )
     if contradictions:
         negative_reasons += (
             "post-onset LIVE contradictions below corridor: " + ", ".join(contradictions),
@@ -920,14 +986,14 @@ def _build_corridor_candidate(
         child_pole_id=corridor.downstream_pole_id,
         affected_pole_ids=affected_ids,
         precision=LocalizationPrecision.CORRIDOR,
-        topology_source=TopologySource.SURVEYED,
+        topology_source=topology_source,
         latitude=(upstream.latitude + downstream.latitude) / 2,
         longitude=(upstream.longitude + downstream.longitude) / 2,
         pin_code=downstream.pin_code or upstream.pin_code,
         confidence_score=score,
         confidence_level="MEDIUM" if score >= 50 else "LOW",
         confidence_reason=(
-            f"Surveyed corridor from {corridor.upstream_pole_id} LIVE to "
+            f"{topology_source.value.title()} corridor from {corridor.upstream_pole_id} LIVE to "
             f"{corridor.downstream_pole_id} DARK; exact boundary is hidden by "
             f"{len(corridor.skipped_pole_ids)} unusable pole observation(s)."
         ),
@@ -948,6 +1014,9 @@ def _build_corridor_candidate(
             components=components,
             unusable_pole_ids=unusable_ids,
             corridor=corridor,
+            topology_quality_score=snapshot.topology_quality_score,
+            topology_quality_tier=snapshot.topology_quality_tier,
+            topology_quality_reasons=snapshot.topology_quality_reasons,
         ),
     )
 
@@ -971,8 +1040,10 @@ def _build_degraded_dt_candidate(
         if not _has_usable_device_evidence(pole, snapshot, freshness)
     )
     spread = _dark_observation_spread(dark)
+    topology_source = _snapshot_topology_source(snapshot)
     components = replace(
         _confidence_components(observable, dark, (), spread),
+        topology=round(25 * snapshot.topology_quality_score),
         boundary_clarity=0,
     )
     score = min(49, max(0, sum(components.as_dict().values())))
@@ -989,7 +1060,7 @@ def _build_degraded_dt_candidate(
         child_pole_id=None,
         affected_pole_ids=dark_ids,
         precision=LocalizationPrecision.DT_LEVEL,
-        topology_source=TopologySource.SURVEYED,
+        topology_source=topology_source,
         latitude=snapshot.dt_latitude,
         longitude=snapshot.dt_longitude,
         pin_code=snapshot.dt_pin_code,
@@ -1016,8 +1087,20 @@ def _build_degraded_dt_candidate(
             ),
             components=components,
             unusable_pole_ids=unusable_ids,
+            topology_quality_score=snapshot.topology_quality_score,
+            topology_quality_tier=snapshot.topology_quality_tier,
+            topology_quality_reasons=snapshot.topology_quality_reasons,
         ),
     )
+
+
+def _snapshot_topology_source(snapshot: NetworkSnapshot) -> TopologySource:
+    sources = {span.source for span in snapshot.spans}
+    if len(sources) == 1:
+        return next(iter(sources))
+    if snapshot.inference_version is not None:
+        return TopologySource.INFERRED
+    return TopologySource.SURVEYED
 
 
 def _dark_observation_spread(dark: tuple[PoleEvidence, ...]) -> float | None:

@@ -360,57 +360,57 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 5.2 Generate candidate geographic edges
 
-- [ ] Group topology-missing poles by DT.
-- [ ] Include the transformer as a root candidate.
-- [ ] Find nearby candidate neighbours without building an unnecessary full global graph.
-- [ ] Calculate Haversine distance for each candidate edge.
-- [ ] Reject edges above the configured maximum distance.
-- [ ] Test: candidate edges never cross DT boundaries.
-- [ ] Test: clearly distant poles are not considered neighbours.
+- [x] Group topology-missing poles by DT.
+- [x] Include the transformer as a root candidate.
+- [x] Find nearby candidate neighbours without building an unnecessary full global graph.
+- [x] Calculate Haversine distance for each candidate edge.
+- [x] Reject edges above the configured maximum distance.
+- [x] Test: candidate edges never cross DT boundaries.
+- [x] Test: clearly distant poles are not considered neighbours.
 
 ## 5.3 Build the inferred radial tree
 
-- [ ] Run a Minimum Spanning Tree algorithm per topology-missing DT.
-- [ ] Include the transformer root.
-- [ ] Verify the result is connected.
-- [ ] Verify the result is acyclic.
-- [ ] Root the tree at the transformer using BFS or DFS.
-- [ ] Convert undirected MST edges into parent → child edges.
-- [ ] Mark every generated edge as `INFERRED`.
-- [ ] Store the inference version.
-- [ ] Test: every inferred pole has exactly one path to its DT.
-- [ ] Test: rerunning inference is idempotent.
+- [x] Run a Minimum Spanning Tree algorithm per topology-missing DT.
+- [x] Include the transformer root.
+- [x] Verify the result is connected.
+- [x] Verify the result is acyclic.
+- [x] Root the tree at the transformer using BFS or DFS.
+- [x] Convert undirected MST edges into parent → child edges.
+- [x] Mark every generated edge as `INFERRED`.
+- [x] Store the inference version.
+- [x] Test: every inferred pole has exactly one path to its DT.
+- [x] Test: rerunning inference is idempotent.
 
 ## 5.4 Score inferred-edge quality
 
-- [ ] Define a normalized distance score.
-- [ ] Penalize unusually long edges.
-- [ ] Penalize edges where several neighbours have nearly equal cost.
+- [x] Define a normalized distance score.
+- [x] Penalize unusually long edges.
+- [x] Penalize edges where several neighbours have nearly equal cost.
 - [ ] Penalize suspicious geometry or isolated clusters.
-- [ ] Produce an `edge_confidence` value from 0 to 1.
-- [ ] Test: obvious nearest-neighbour edges score higher than ambiguous edges.
-- [ ] Test: edge confidence is deterministic for identical input.
+- [x] Produce an `edge_confidence` value from 0 to 1.
+- [x] Test: obvious nearest-neighbour edges score higher than ambiguous edges.
+- [x] Test: edge confidence is deterministic for identical input.
 
 ## 5.5 Add topology-level quality
 
-- [ ] Aggregate edge confidence into a DT topology-quality score.
-- [ ] Record whether the DT is:
+- [x] Aggregate edge confidence into a DT topology-quality score.
+- [x] Record whether the DT is:
   - surveyed
   - strongly inferred
   - weakly inferred
   - unusable
-- [ ] Define the threshold below which exact/probable span reporting is forbidden.
-- [ ] Test: weak inferred topology forces coarser localization.
+- [x] Define the threshold below which exact/probable span reporting is forbidden.
+- [x] Test: weak inferred topology forces coarser localization.
 
 ## 5.6 Evaluate inference against simulator ground truth
 
-- [ ] Compare inferred edges with hidden ground-truth edges.
-- [ ] Measure exact-edge accuracy.
+- [x] Compare inferred edges with hidden ground-truth edges.
+- [x] Measure exact-edge accuracy.
 - [ ] Measure path and subtree similarity.
-- [ ] Measure how often the actual fault falls inside the reported corridor.
-- [ ] Record the result in a repeatable test report.
-- [ ] Do not expose ground truth to production localization code.
-- [ ] Test: the evaluation fails if production code reads the ground-truth table.
+- [x] Measure how often the actual fault falls inside the reported corridor.
+- [x] Record the result in a repeatable test report.
+- [x] Do not expose ground truth to production localization code.
+- [x] Test: the evaluation fails if production code reads the ground-truth table.
 
 ---
 

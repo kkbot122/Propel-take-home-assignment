@@ -26,7 +26,7 @@ Optimize in this order:
 - [x] PB-02 — DT and feeder fault classification
 - [x] PB-03 — Multiple simultaneous surveyed faults
 - [x] PB-04 — Missing-device corridors and degraded precision
-- [ ] PB-05 — Unknown-topology inference and localization
+- [x] PB-05 — Unknown-topology inference and localization
 - [ ] PB-06 — Confidence scoring and evidence calibration
 - [ ] PB-07 — Realistic multi-feeder network and telemetry generator
 - [ ] PB-08 — Batch ingestion, reliability, and measured performance
@@ -261,44 +261,44 @@ Precision and confidence from provenance and evidence
 
 ### Implementation
 
-- [ ] Add one topology-provider protocol returning immutable rooted topology.
-- [ ] Keep the surveyed provider behavior unchanged behind that protocol.
-- [ ] Group unknown-topology poles by DT and validate coordinate bounds.
-- [ ] Generate bounded geographic candidate edges; do not construct an unbounded
+- [x] Add one topology-provider protocol returning immutable rooted topology.
+- [x] Keep the surveyed provider behavior unchanged behind that protocol.
+- [x] Group unknown-topology poles by DT and validate coordinate bounds.
+- [x] Generate bounded geographic candidate edges; do not construct an unbounded
       all-pairs graph for large DTs.
-- [ ] Score candidate edges using distance and available physical constraints.
-- [ ] Build and root a deterministic minimum spanning tree at the DT.
-- [ ] Record every inferred edge with source, distance, score, and topology version.
-- [ ] Compute overall topology quality and explain its limiting factors.
-- [ ] Reject disconnected, implausible, or cyclic inferred results honestly.
-- [ ] Run the same boundary-localization rules over inferred adjacency.
-- [ ] Prohibit `EXACT_SPAN` for every inferred result.
-- [ ] Return `PROBABLE_SPAN`, `CORRIDOR`, or `DT_LEVEL` according to topology and
+- [x] Score candidate edges using distance and available physical constraints.
+- [x] Build and root a deterministic minimum spanning tree at the DT.
+- [x] Record every inferred edge with source, distance, score, and topology version.
+- [x] Compute overall topology quality and explain its limiting factors.
+- [x] Reject disconnected, implausible, or cyclic inferred results honestly.
+- [x] Run the same boundary-localization rules over inferred adjacency.
+- [x] Prohibit `EXACT_SPAN` for every inferred result.
+- [x] Return `PROBABLE_SPAN`, `CORRIDOR`, or `DT_LEVEL` according to topology and
       evidence quality.
-- [ ] Keep inferred topology visibly distinct in APIs and the operator map.
-- [ ] Preserve hidden simulator ground truth outside inference inputs.
+- [x] Keep inferred topology visibly distinct in APIs and the operator map.
+- [x] Preserve hidden simulator ground truth outside inference inputs.
 
 ### Evaluation
 
-- [ ] Measure exact-edge recovery against hidden ground truth.
-- [ ] Measure corridor containment when the exact edge differs.
-- [ ] Report topology quality separately from localization evidence confidence.
-- [ ] Use fixed seeds so every comparison is reproducible.
-- [ ] Record failure cases rather than tuning only to successful layouts.
+- [x] Measure exact-edge recovery against hidden ground truth.
+- [x] Measure corridor containment when the exact edge differs.
+- [x] Report topology quality separately from localization evidence confidence.
+- [x] Use fixed seeds so every comparison is reproducible.
+- [x] Record failure cases rather than tuning only to successful layouts.
 
 ### Required tests
 
-- [ ] The same coordinate fixture always produces the same rooted tree.
-- [ ] Inferred topology contains every eligible pole exactly once and has no cycle.
-- [ ] A known hidden fault is contained by the returned probable span or corridor.
-- [ ] No inferred result can produce `EXACT_SPAN`.
-- [ ] Weak or disconnected geography degrades to `DT_LEVEL` or a clear error.
-- [ ] Surveyed topology continues to take precedence when it exists.
-- [ ] Inference does not read simulator ground truth.
+- [x] The same coordinate fixture always produces the same rooted tree.
+- [x] Inferred topology contains every eligible pole exactly once and has no cycle.
+- [x] A known hidden fault is contained by the returned probable span or corridor.
+- [x] No inferred result can produce `EXACT_SPAN`.
+- [x] Weak or disconnected geography degrades to `DT_LEVEL` or a clear error.
+- [x] Surveyed topology continues to take precedence when it exists.
+- [x] Inference does not read simulator ground truth.
 
 ### Exit condition
 
-- [ ] Unknown-topology DTs produce reproducible, provenance-correct localization
+- [x] Unknown-topology DTs produce reproducible, provenance-correct localization
       whose precision never exceeds measured topology quality.
 
 ---

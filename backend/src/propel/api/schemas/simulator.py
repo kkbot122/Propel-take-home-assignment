@@ -12,9 +12,9 @@ class InjectFixedFaultRequest(BaseModel):
 
     fault_type: SimulatorFaultType = SimulatorFaultType.SPAN_FAULT
     feeder_id: Literal["FDR-001"] = "FDR-001"
-    dt_id: Literal["DT-001", "DT-002"] = "DT-001"
-    parent_pole_id: Literal["P-001", "P-101"] = "P-001"
-    child_pole_id: Literal["P-002", "P-102"] = "P-002"
+    dt_id: Literal["DT-001", "DT-002", "DT-003"] = "DT-001"
+    parent_pole_id: Literal["P-001", "P-101", "P-201"] = "P-001"
+    child_pole_id: Literal["P-002", "P-102", "P-202"] = "P-002"
     missing_device_pole_ids: list[str] = Field(default_factory=list, max_length=6)
     omit_loss_pole_ids: list[str] = Field(default_factory=list, max_length=6)
 

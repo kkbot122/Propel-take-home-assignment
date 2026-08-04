@@ -75,11 +75,18 @@ export interface NetworkSpan {
   child_pole_id: string
   source: 'SURVEYED' | 'INFERRED'
   edge_confidence: number
+  distance_m: number
+  inference_version: string | null
 }
 
 export interface NetworkTopology {
   dt_id: string
   topology_version: number
+  source: 'SURVEYED' | 'INFERRED' | null
+  quality_score: number
+  quality_tier: string
+  quality_reasons: string[]
+  inference_version: string | null
   spans: NetworkSpan[]
 }
 
@@ -124,9 +131,9 @@ export interface SimulatedFault {
 export interface InjectFaultRequest {
   fault_type: SimulatedFault['fault_type']
   feeder_id?: 'FDR-001'
-  dt_id?: 'DT-001' | 'DT-002'
-  parent_pole_id?: 'P-001' | 'P-101'
-  child_pole_id?: 'P-002' | 'P-102'
+  dt_id?: 'DT-001' | 'DT-002' | 'DT-003'
+  parent_pole_id?: 'P-001' | 'P-101' | 'P-201'
+  child_pole_id?: 'P-002' | 'P-102' | 'P-202'
   missing_device_pole_ids?: string[]
   omit_loss_pole_ids?: string[]
 }

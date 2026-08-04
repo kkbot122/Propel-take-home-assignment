@@ -116,6 +116,8 @@ class NetworkSpanResponse(BaseModel):
     child_pole_id: str
     source: TopologySource
     edge_confidence: Annotated[float, Field(ge=0, le=1)]
+    distance_m: Annotated[float, Field(ge=0)]
+    inference_version: str | None
 
 
 class NetworkTopologyResponse(BaseModel):
@@ -123,6 +125,11 @@ class NetworkTopologyResponse(BaseModel):
 
     dt_id: str
     topology_version: int
+    source: TopologySource | None
+    quality_score: Annotated[float, Field(ge=0, le=1)]
+    quality_tier: str
+    quality_reasons: list[str]
+    inference_version: str | None
     spans: list[NetworkSpanResponse]
 
 
