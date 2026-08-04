@@ -299,6 +299,36 @@ so concurrent cycles and repeated repair calls cannot duplicate closure.
 `pole_states`, erasing operational history during reset, manual verification,
 and treating `boot` as proof of restored power.
 
+## 2026-08-04 — Persist suppression without creating dispatch tickets
+
+**Chosen:** A scheduled outage is an immutable domain window with a unique
+external ID, explicit `SPAN`, `DISTRIBUTION_TRANSFORMER`, or `FEEDER` scope,
+UTC-aware bounds, source, and reason. PostgreSQL stores the feed-shaped record,
+and the repeatable-read DT snapshot loads only bounded, topology-relevant
+windows. Matching uses candidate onset with configurable 10-minute early and
+40-minute overrun grace. When several windows cover an observation, the stable
+precedence is exact span, then DT, then feeder, followed by external ID.
+
+An isolated dark device becomes `SENSOR_ANOMALY` only when surveyed topology
+shows a descendant with fresh `LIVE` telemetry received after the dark onset.
+A terminal pole has no such evidence and remains eligible for normal span-fault
+handling. Stale or silent devices do not become dark evidence.
+
+Both `SENSOR_ANOMALY` and `SCHEDULED_OUTAGE` are persisted as `SUPPRESSED`
+incidents with explicit reason, source, optional schedule reference, structured
+evidence, and affected poles. Suppressed fingerprints are concurrency-safe, but
+the incident service returns no ticket ID and never inserts a ticket or ticket
+event. The API and console present these records as diagnostics rather than the
+active dispatch queue.
+
+**Reason:** False dispatches remain explainable and auditable without allowing
+planned work or physically contradictory device reports into the repair state
+machine. The deterministic rule also preserves the backbone span behavior when
+the evidence does not justify suppression.
+
+**Deferred:** External schedule-feed refresh, schedule authoring, scope-overrun
+escalation, and later incident reclassification remain in the full backlog.
+
 ## What we would do with two more weeks
 
 - Add a PostgreSQL inbox/outbox around queue publication.

@@ -92,7 +92,9 @@ class PostgresIncidentService:
                     {
                         "event": "incident_candidate_persisted",
                         "incident_id": str(reference.incident_id),
-                        "ticket_id": str(reference.ticket_id),
+                        "ticket_id": (
+                            str(reference.ticket_id) if reference.ticket_id is not None else None
+                        ),
                         "fingerprint": reference.fingerprint,
                     }
                 )
@@ -105,16 +107,24 @@ class PostgresIncidentService:
         candidate: FaultCandidate,
     ) -> IncidentTicketReference:
         fingerprint = incident_fingerprint(candidate)
+        incident_status = (
+            IncidentStatus.SUPPRESSED
+            if candidate.suppression is not None
+            else IncidentStatus.ACTIVE
+        )
         evidence = {
             "analysis_at": candidate.analysis_at.isoformat(),
             "topology_version": candidate.topology_version,
             "topology_source": candidate.topology_source.value,
             "confidence_level": candidate.confidence_level,
             "candidate": candidate.evidence.as_dict(),
+            "suppression": (
+                candidate.suppression.as_dict() if candidate.suppression is not None else None
+            ),
         }
         incident_insert = insert(Incident).values(
             fingerprint=fingerprint,
-            status=IncidentStatus.ACTIVE,
+            status=incident_status,
             classification=candidate.classification,
             suspected_asset_type=candidate.suspected_asset_type,
             suspected_asset_id=candidate.suspected_asset_id,
@@ -126,13 +136,22 @@ class PostgresIncidentService:
             confidence_score=candidate.confidence_score,
             confidence_reason=candidate.confidence_reason,
             evidence=evidence,
+            suppression_reason=(
+                candidate.suppression.reason if candidate.suppression is not None else None
+            ),
+            suppression_source=(
+                candidate.suppression.source if candidate.suppression is not None else None
+            ),
+            suppression_external_id=(
+                candidate.suppression.external_id if candidate.suppression is not None else None
+            ),
             detected_at=candidate.analysis_at,
             updated_at=candidate.analysis_at,
         )
         incident_id = await session.scalar(
             incident_insert.on_conflict_do_update(
                 index_elements=[Incident.fingerprint],
-                index_where=text("status = 'ACTIVE'"),
+                index_where=text("status IN ('ACTIVE', 'SUPPRESSED')"),
                 set_={
                     "classification": incident_insert.excluded.classification,
                     "suspected_asset_type": incident_insert.excluded.suspected_asset_type,
@@ -144,6 +163,9 @@ class PostgresIncidentService:
                     "confidence_score": incident_insert.excluded.confidence_score,
                     "confidence_reason": incident_insert.excluded.confidence_reason,
                     "evidence": incident_insert.excluded.evidence,
+                    "suppression_reason": incident_insert.excluded.suppression_reason,
+                    "suppression_source": incident_insert.excluded.suppression_source,
+                    "suppression_external_id": incident_insert.excluded.suppression_external_id,
                     "updated_at": incident_insert.excluded.updated_at,
                 },
                 where=incident_insert.excluded.updated_at >= Incident.updated_at,
@@ -155,7 +177,7 @@ class PostgresIncidentService:
                 select(Incident.incident_id)
                 .where(
                     Incident.fingerprint == fingerprint,
-                    Incident.status == IncidentStatus.ACTIVE,
+                    Incident.status.in_((IncidentStatus.ACTIVE, IncidentStatus.SUPPRESSED)),
                 )
                 .with_for_update()
             )
@@ -197,6 +219,13 @@ class PostgresIncidentService:
                 update(Incident)
                 .where(Incident.incident_id == incident_id)
                 .values(affected_pole_count=affected_count or 0)
+            )
+
+        if candidate.suppression is not None:
+            return IncidentTicketReference(
+                incident_id=incident_id,
+                ticket_id=None,
+                fingerprint=fingerprint,
             )
 
         ticket_id = await session.scalar(
@@ -316,6 +345,9 @@ class PostgresIncidentService:
             confidence_score=incident.confidence_score,
             confidence_reason=incident.confidence_reason,
             evidence=incident.evidence,
+            suppression_reason=incident.suppression_reason,
+            suppression_source=incident.suppression_source,
+            suppression_external_id=incident.suppression_external_id,
             detected_at=incident.detected_at,
             updated_at=incident.updated_at,
             resolved_at=incident.resolved_at,

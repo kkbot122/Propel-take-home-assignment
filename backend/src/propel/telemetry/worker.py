@@ -58,6 +58,8 @@ async def run_worker() -> None:
             due_set_name=settings.analysis_due_set_name,
             live_freshness_seconds=settings.analysis_live_freshness_seconds,
             retry_delay_seconds=settings.analysis_retry_delay_seconds,
+            schedule_early_grace_seconds=settings.scheduled_outage_early_grace_seconds,
+            schedule_overrun_grace_seconds=settings.scheduled_outage_overrun_grace_seconds,
             candidate_sink=incident_service,
         )
         await consumer.ensure_group()

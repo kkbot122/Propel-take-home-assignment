@@ -5,6 +5,7 @@ import pytest
 
 from propel.analysis.localization import localize_known_topology
 from propel.analysis.models import (
+    CandidateSuppression,
     DeviceEvidence,
     FaultCandidate,
     NetworkSnapshot,
@@ -15,6 +16,7 @@ from propel.domain.enums import (
     DeviceHealthStatus,
     FaultClass,
     PoleStatus,
+    SuspectedAssetType,
     TicketStatus,
     TopologySource,
 )
@@ -40,6 +42,7 @@ def span_candidate() -> FaultCandidate:
     )
     snapshot = NetworkSnapshot(
         dt_id="DT-001",
+        feeder_id="FDR-001",
         topology_version=1,
         analysis_at=analysis_at,
         poles=(
@@ -77,6 +80,32 @@ def test_span_fingerprint_is_stable_for_same_boundary() -> None:
     assert incident_fingerprint(replace(candidate, confidence_score=72)) == incident_fingerprint(
         candidate
     )
+
+
+def test_suppressed_candidate_fingerprints_are_stable_domain_keys() -> None:
+    candidate = span_candidate()
+    sensor = replace(
+        candidate,
+        classification=FaultClass.SENSOR_ANOMALY,
+        suspected_asset_type=SuspectedAssetType.DEVICE,
+        suspected_asset_id="DEV-P-002",
+        suppression=CandidateSuppression(
+            reason="fresh downstream live contradiction",
+            source="telemetry-consistency-rule",
+        ),
+    )
+    scheduled = replace(
+        candidate,
+        classification=FaultClass.SCHEDULED_OUTAGE,
+        suppression=CandidateSuppression(
+            reason="planned maintenance",
+            source="schedule-feed",
+            external_id="SO-001",
+        ),
+    )
+
+    assert incident_fingerprint(sensor) == "sensor:DT-001:DEV-P-002"
+    assert incident_fingerprint(scheduled) == "scheduled:SO-001:DT-001:P-001->P-002"
 
 
 @pytest.mark.parametrize(

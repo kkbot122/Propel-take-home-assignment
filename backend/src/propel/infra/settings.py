@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     analysis_debounce_seconds: float = Field(default=10.0, ge=0, le=300)
     analysis_live_freshness_seconds: float = Field(default=1_920, gt=0, le=86_400)
     analysis_retry_delay_seconds: float = Field(default=5.0, gt=0, le=300)
+    scheduled_outage_early_grace_seconds: float = Field(default=600, ge=0, le=3_600)
+    scheduled_outage_overrun_grace_seconds: float = Field(default=2_400, ge=0, le=14_400)
     worker_retry_delay_seconds: float = Field(default=1.0, gt=0, le=30)
     restoration_threshold: float = Field(default=0.8, gt=0, le=1)
     restoration_stabilization_seconds: float = Field(default=10.0, ge=0, le=300)

@@ -1,14 +1,22 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from propel.analysis.localization import InvalidTopologySnapshotError, localize_known_topology
-from propel.analysis.models import DeviceEvidence, NetworkSnapshot, PoleEvidence, TopologySpan
+from propel.analysis.models import (
+    DeviceEvidence,
+    NetworkSnapshot,
+    PoleEvidence,
+    ScheduledOutageWindow,
+    TopologySpan,
+)
 from propel.domain.enums import (
     DeviceHealthStatus,
     FaultClass,
     LocalizationPrecision,
     PoleStatus,
+    ScheduledOutageScope,
     SuspectedAssetType,
     TopologySource,
 )
@@ -50,6 +58,7 @@ def linear_snapshot(
     ],
     *,
     reverse: bool = False,
+    scheduled_outages: tuple[ScheduledOutageWindow, ...] = (),
 ) -> NetworkSnapshot:
     poles = tuple(pole(index, *state) for index, state in enumerate(states, start=1))
     spans = (
@@ -60,10 +69,12 @@ def linear_snapshot(
     )
     return NetworkSnapshot(
         dt_id="DT-001",
+        feeder_id="FDR-001",
         topology_version=1,
         analysis_at=ANALYSIS_AT,
         poles=tuple(reversed(poles)) if reverse else poles,
         spans=tuple(reversed(spans)) if reverse else spans,
+        scheduled_outages=scheduled_outages,
     )
 
 
@@ -126,6 +137,12 @@ def test_post_onset_live_descendant_is_a_contradiction() -> None:
 
     candidate = localize_known_topology(snapshot)[0]
 
+    assert candidate.classification == FaultClass.SENSOR_ANOMALY
+    assert candidate.suspected_asset_type == SuspectedAssetType.DEVICE
+    assert candidate.suspected_asset_id == "DEV-P-002"
+    assert candidate.precision == LocalizationPrecision.POLE_LEVEL
+    assert candidate.suppression is not None
+    assert candidate.suppression.source == "telemetry-consistency-rule"
     assert candidate.evidence.post_onset_live_contradictions == ("P-003",)
     assert candidate.evidence.pre_onset_live_observations == ()
     assert candidate.evidence.components.contradiction_penalty == -20
@@ -147,9 +164,139 @@ def test_pre_onset_live_descendant_is_prior_evidence_not_a_contradiction() -> No
 
     candidate = localize_known_topology(snapshot)[0]
 
+    assert candidate.classification == FaultClass.SPAN_FAULT
     assert candidate.evidence.post_onset_live_contradictions == ()
     assert candidate.evidence.pre_onset_live_observations == ("P-003",)
     assert any("prior-state evidence" in reason for reason in candidate.evidence.positive_reasons)
+
+
+def test_stale_silence_state_does_not_create_anomaly_or_fault_candidate() -> None:
+    snapshot = linear_snapshot(
+        (
+            (PoleStatus.LIVE, ANALYSIS_AT - timedelta(seconds=20)),
+            (PoleStatus.STALE, ANALYSIS_AT - timedelta(minutes=33)),
+            (PoleStatus.LIVE, ANALYSIS_AT - timedelta(seconds=2)),
+            (PoleStatus.LIVE, ANALYSIS_AT - timedelta(seconds=1)),
+        )
+    )
+
+    assert localize_known_topology(snapshot) == []
+
+
+def test_terminal_pole_loss_is_not_treated_as_sensor_anomaly() -> None:
+    snapshot = linear_snapshot(
+        (
+            (PoleStatus.LIVE, ANALYSIS_AT - timedelta(seconds=20)),
+            (PoleStatus.LIVE, ANALYSIS_AT - timedelta(seconds=15)),
+            (PoleStatus.LIVE, ANALYSIS_AT - timedelta(seconds=12)),
+            (PoleStatus.DARK, ONSET_AT),
+        )
+    )
+
+    candidate = localize_known_topology(snapshot)[0]
+
+    assert candidate.classification == FaultClass.SPAN_FAULT
+    assert candidate.suspected_asset_id == "P-003->P-004"
+    assert candidate.suppression is None
+
+
+def scheduled_outage(
+    scope: ScheduledOutageScope,
+    scope_id: str,
+    *,
+    starts_at: datetime = ONSET_AT - timedelta(minutes=1),
+    ends_at: datetime = ONSET_AT + timedelta(minutes=1),
+    outage_id: str = "SO-TEST-001",
+) -> ScheduledOutageWindow:
+    return ScheduledOutageWindow(
+        outage_id=outage_id,
+        scope=scope,
+        scope_id=scope_id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        source="test-schedule-feed",
+        reason="Planned maintenance",
+    )
+
+
+@pytest.mark.parametrize(
+    ("scope", "scope_id"),
+    [
+        (ScheduledOutageScope.SPAN, "P-001->P-002"),
+        (ScheduledOutageScope.DISTRIBUTION_TRANSFORMER, "DT-001"),
+        (ScheduledOutageScope.FEEDER, "FDR-001"),
+    ],
+)
+def test_active_schedule_scopes_suppress_matching_span(
+    scope: ScheduledOutageScope,
+    scope_id: str,
+) -> None:
+    snapshot = replace(
+        fixed_fault_snapshot(),
+        scheduled_outages=(scheduled_outage(scope, scope_id),),
+    )
+
+    candidate = localize_known_topology(snapshot)[0]
+
+    assert candidate.classification == FaultClass.SCHEDULED_OUTAGE
+    assert candidate.suspected_asset_id == "P-001->P-002"
+    assert candidate.suppression is not None
+    assert candidate.suppression.external_id == "SO-TEST-001"
+    assert candidate.suppression.source == "test-schedule-feed"
+
+
+@pytest.mark.parametrize(
+    "outage",
+    [
+        scheduled_outage(
+            ScheduledOutageScope.SPAN,
+            "P-001->P-002",
+            starts_at=ONSET_AT - timedelta(hours=2),
+            ends_at=ONSET_AT - timedelta(hours=1),
+        ),
+        scheduled_outage(
+            ScheduledOutageScope.SPAN,
+            "P-001->P-002",
+            starts_at=ONSET_AT + timedelta(hours=1),
+            ends_at=ONSET_AT + timedelta(hours=2),
+        ),
+        scheduled_outage(ScheduledOutageScope.SPAN, "P-003->P-004"),
+        scheduled_outage(ScheduledOutageScope.DISTRIBUTION_TRANSFORMER, "DT-999"),
+        scheduled_outage(ScheduledOutageScope.FEEDER, "FDR-999"),
+    ],
+)
+def test_expired_future_or_nonoverlapping_schedule_does_not_suppress(
+    outage: ScheduledOutageWindow,
+) -> None:
+    snapshot = replace(fixed_fault_snapshot(), scheduled_outages=(outage,))
+
+    candidate = localize_known_topology(snapshot)[0]
+
+    assert candidate.classification == FaultClass.SPAN_FAULT
+    assert candidate.suppression is None
+
+
+def test_scheduled_suppression_is_deterministic_when_schedule_order_changes() -> None:
+    broad = scheduled_outage(
+        ScheduledOutageScope.FEEDER,
+        "FDR-001",
+        outage_id="SO-BROAD",
+    )
+    exact = scheduled_outage(
+        ScheduledOutageScope.SPAN,
+        "P-001->P-002",
+        outage_id="SO-EXACT",
+    )
+    first = localize_known_topology(
+        replace(fixed_fault_snapshot(), scheduled_outages=(broad, exact))
+    )[0]
+    second = localize_known_topology(
+        replace(fixed_fault_snapshot(), scheduled_outages=(exact, broad))
+    )[0]
+
+    assert first == second
+    assert first.suppression is not None
+    assert first.suppression.external_id == "SO-EXACT"
 
 
 def test_no_dark_poles_returns_no_candidate() -> None:
@@ -181,6 +328,7 @@ def test_stale_live_parent_cannot_establish_an_exact_boundary() -> None:
 def test_invalid_surveyed_cycle_is_rejected() -> None:
     snapshot = NetworkSnapshot(
         dt_id="DT-001",
+        feeder_id="FDR-001",
         topology_version=1,
         analysis_at=ANALYSIS_AT,
         poles=(

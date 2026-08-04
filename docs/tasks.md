@@ -549,7 +549,7 @@ Build the generator early because every later task depends on realistic test dat
 - [ ] Load current pole states.
 - [ ] Load topology edges and their sources.
 - [ ] Load device-health metadata.
-- [ ] Load active scheduled outages.
+- [x] Load active scheduled outages.
 - [ ] Capture one analysis timestamp.
 - [ ] Preserve whether each live observation was received before or after candidate onset.
 - [ ] Test: all snapshot rows belong to the same DT.
@@ -662,12 +662,12 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 11.1 Classify sensor anomalies
 
-- [ ] Detect a dark pole with a fresh live descendant that depends on it in surveyed topology.
-- [ ] Classify as `SENSOR_ANOMALY`.
-- [ ] Do not create an outage ticket.
-- [ ] Create a diagnostic record for the operator.
+- [x] Detect a dark pole with a fresh live descendant that depends on it in surveyed topology.
+- [x] Classify as `SENSOR_ANOMALY`.
+- [x] Do not create an outage ticket.
+- [x] Create a diagnostic record for the operator.
 - [ ] Lower certainty when the relationship is inferred.
-- [ ] Test: isolated dark sensor with downstream live state creates no outage ticket.
+- [x] Test: isolated dark sensor with downstream live state creates no outage ticket.
 
 ## 11.2 Classify span faults
 
@@ -698,15 +698,15 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 11.5 Classify scheduled outages
 
-- [ ] Match active schedule by scope and target ID.
-- [ ] Apply configurable early-start and overrun grace windows.
-- [ ] Label matching observations as `SCHEDULED_OUTAGE`.
-- [ ] Suppress normal fault-ticket creation.
+- [x] Match active schedule by scope and target ID.
+- [x] Apply configurable early-start and overrun grace windows.
+- [x] Label matching observations as `SCHEDULED_OUTAGE`.
+- [x] Suppress normal fault-ticket creation.
 - [ ] Continue monitoring for contradictions.
 - [ ] Escalate if outage scope exceeds the schedule.
 - [ ] Escalate if outage persists beyond the allowed grace period.
 - [ ] Test: planned DT outage creates no fault ticket.
-- [ ] Test: outage outside planned scope is not suppressed.
+- [x] Test: outage outside planned scope is not suppressed.
 
 ## 11.6 Classify insufficient evidence
 
@@ -849,10 +849,10 @@ Build the generator early because every later task depends on realistic test dat
 
 ## 14.1 Create one ticket per actionable incident
 
-- [ ] Create tickets only for actionable real faults.
-- [ ] Do not create outage tickets for sensor anomalies.
-- [ ] Do not create normal fault tickets for scheduled outages.
-- [ ] Test: one actionable incident creates one ticket.
+- [x] Create tickets only for actionable real faults.
+- [x] Do not create outage tickets for sensor anomalies.
+- [x] Do not create normal fault tickets for scheduled outages.
+- [x] Test: one actionable incident creates one ticket.
 
 ## 14.2 Implement valid transitions
 

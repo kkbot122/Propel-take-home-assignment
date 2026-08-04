@@ -27,9 +27,20 @@ class AutomaticTransitionOnlyError(Exception):
 
 
 def incident_fingerprint(candidate: FaultCandidate) -> str:
-    if candidate.classification != FaultClass.SPAN_FAULT:
-        raise UnsupportedIncidentCandidateError(candidate.classification.value)
-    return f"span:{candidate.dt_id}:{candidate.parent_pole_id}->{candidate.child_pole_id}"
+    if candidate.classification == FaultClass.SPAN_FAULT:
+        return f"span:{candidate.dt_id}:{candidate.parent_pole_id}->{candidate.child_pole_id}"
+    if candidate.classification == FaultClass.SENSOR_ANOMALY:
+        if candidate.suppression is None:
+            raise UnsupportedIncidentCandidateError(candidate.classification.value)
+        return f"sensor:{candidate.dt_id}:{candidate.suspected_asset_id}"
+    if candidate.classification == FaultClass.SCHEDULED_OUTAGE:
+        if candidate.suppression is None or candidate.suppression.external_id is None:
+            raise UnsupportedIncidentCandidateError(candidate.classification.value)
+        return (
+            f"scheduled:{candidate.suppression.external_id}:{candidate.dt_id}:"
+            f"{candidate.parent_pole_id}->{candidate.child_pole_id}"
+        )
+    raise UnsupportedIncidentCandidateError(candidate.classification.value)
 
 
 def require_operator_transition(

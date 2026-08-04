@@ -24,6 +24,9 @@ export interface Incident {
   confidence_score: number
   confidence_reason: string
   evidence: Record<string, unknown>
+  suppression_reason: string | null
+  suppression_source: string | null
+  suppression_external_id: string | null
   detected_at: string
   updated_at: string
   resolved_at: string | null

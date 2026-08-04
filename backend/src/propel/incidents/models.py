@@ -17,7 +17,7 @@ from propel.domain.enums import (
 @dataclass(frozen=True, slots=True)
 class IncidentTicketReference:
     incident_id: UUID
-    ticket_id: UUID
+    ticket_id: UUID | None
     fingerprint: str
 
 
@@ -38,6 +38,9 @@ class IncidentView:
     confidence_score: int
     confidence_reason: str
     evidence: dict[str, Any]
+    suppression_reason: str | None
+    suppression_source: str | None
+    suppression_external_id: str | None
     detected_at: datetime
     updated_at: datetime
     resolved_at: datetime | None

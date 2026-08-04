@@ -419,6 +419,11 @@ button:disabled {
   background: var(--green-pale);
 }
 
+.status-suppressed {
+  color: #5a4a1d;
+  background: #eee7ca;
+}
+
 .confidence-mini {
   color: var(--muted);
   font-size: 0.65rem;
@@ -704,6 +709,22 @@ button:disabled {
   color: #65450f;
   background: var(--amber-pale);
   font-size: 0.7rem;
+}
+
+.suppression-notice {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0 1rem 1rem;
+  padding: 0.8rem;
+  border: 1px solid #d7ca95;
+  color: #594b1d;
+  background: #f5f0da;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.suppression-notice small {
+  color: #716640;
 }
 
 .restoration-notice.verified {

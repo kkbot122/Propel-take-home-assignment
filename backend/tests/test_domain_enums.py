@@ -2,13 +2,25 @@ from enum import StrEnum
 
 import pytest
 
-from propel.domain.enums import FaultClass, LocalizationPrecision, PoleStatus, TicketStatus
+from propel.domain.enums import (
+    FaultClass,
+    LocalizationPrecision,
+    PoleStatus,
+    ScheduledOutageScope,
+    SuspectedAssetType,
+    TicketStatus,
+)
 
 
 @pytest.mark.parametrize(
     ("enum_class", "valid_value"),
     [
         (FaultClass, "SPAN_FAULT"),
+        (FaultClass, "SENSOR_ANOMALY"),
+        (FaultClass, "SCHEDULED_OUTAGE"),
+        (LocalizationPrecision, "POLE_LEVEL"),
+        (SuspectedAssetType, "DEVICE"),
+        (ScheduledOutageScope, "SPAN"),
         (LocalizationPrecision, "EXACT_SPAN"),
         (PoleStatus, "LIVE"),
         (TicketStatus, "DETECTED"),

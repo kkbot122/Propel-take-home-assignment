@@ -16,6 +16,7 @@ from propel.domain.enums import (
     LocalizationPrecision,
     PoleStatus,
     ProcessingOutcome,
+    ScheduledOutageScope,
     SuspectedAssetType,
     TelemetryEventType,
     TopologySource,
@@ -28,6 +29,7 @@ from propel.infra.database.models import (
     Incident,
     Pole,
     PoleState,
+    ScheduledOutage,
     TelemetryEvent,
     TopologyEdge,
 )
@@ -47,6 +49,7 @@ MINIMUM_TABLES = {
     "telemetry_events",
     "pole_states",
     "device_health",
+    "scheduled_outages",
     "incidents",
     "incident_poles",
     "tickets",
@@ -73,6 +76,7 @@ async def test_schema_and_seed_are_complete_and_idempotent(database_engine: Asyn
     assert second_summary.bindings == 4
     assert second_summary.topology_edges == 4
     assert second_summary.live_pole_states == 4
+    assert second_summary.scheduled_outages == 1
 
     async with database_engine.connect() as connection:
         table_names = set(
@@ -81,6 +85,19 @@ async def test_schema_and_seed_are_complete_and_idempotent(database_engine: Asyn
             )
         )
         assert MINIMUM_TABLES <= table_names
+
+        seeded_schedule = (
+            await connection.execute(
+                select(
+                    ScheduledOutage.outage_id,
+                    ScheduledOutage.scope,
+                    ScheduledOutage.scope_id,
+                ).where(ScheduledOutage.outage_id == "SO-SEED-001")
+            )
+        ).one_or_none()
+        assert seeded_schedule is not None
+        assert seeded_schedule.scope == ScheduledOutageScope.SPAN
+        assert seeded_schedule.scope_id == "P-003->P-004"
 
         rows = (
             await connection.execute(

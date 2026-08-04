@@ -58,6 +58,12 @@ export function App() {
     refetchInterval: POLL_INTERVAL_MS,
     retry: 1,
   })
+  const suppressedIncidentsQuery = useQuery({
+    queryKey: ['incidents', 'suppressed'],
+    queryFn: api.suppressedIncidents,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
   const polesQuery = useQuery({
     queryKey: ['network', 'poles', 'DT-001'],
     queryFn: api.poles,
@@ -70,7 +76,11 @@ export function App() {
     staleTime: Number.POSITIVE_INFINITY,
     retry: 1,
   })
-  const incidents = useMemo(() => incidentsQuery.data ?? [], [incidentsQuery.data])
+  const activeIncidents = useMemo(() => incidentsQuery.data ?? [], [incidentsQuery.data])
+  const incidents = useMemo(
+    () => [...activeIncidents, ...(suppressedIncidentsQuery.data ?? [])],
+    [activeIncidents, suppressedIncidentsQuery.data],
+  )
   const effectiveSelectedIncidentId = selectedIncidentId ?? incidents[0]?.incident_id ?? null
   const incidentQuery = useQuery({
     queryKey: ['incident', effectiveSelectedIncidentId],
@@ -150,6 +160,7 @@ export function App() {
 
   const lastUpdatedAt = Math.max(
     incidentsQuery.dataUpdatedAt,
+    suppressedIncidentsQuery.dataUpdatedAt,
     polesQuery.dataUpdatedAt,
     incidentQuery.dataUpdatedAt,
     ticketQuery.dataUpdatedAt,
@@ -157,6 +168,7 @@ export function App() {
   const backendError = queryError(
     healthQuery.error,
     incidentsQuery.error,
+    suppressedIncidentsQuery.error,
     polesQuery.error,
     topologyQuery.error,
     incidentQuery.error,
@@ -216,7 +228,7 @@ export function App() {
               setSelectedIncidentId(null)
               simulatorMutation.mutate({ action: 'inject' })
             }}
-            disabled={operationPending || activeFaultId !== null || incidents.length > 0}
+            disabled={operationPending || activeFaultId !== null || activeIncidents.length > 0}
           >
             <span aria-hidden="true">⚡</span>
             Inject fixed fault
@@ -259,7 +271,7 @@ export function App() {
           incidents={incidents}
           selectedIncidentId={effectiveSelectedIncidentId}
           onSelect={setSelectedIncidentId}
-          loading={incidentsQuery.isPending}
+          loading={incidentsQuery.isPending || suppressedIncidentsQuery.isPending}
         />
 
         <section className="panel map-panel" aria-labelledby="map-title">
@@ -320,7 +332,7 @@ export function App() {
       </section>
 
       <footer className="app-footer">
-        <span>Propel backbone · VS-08 operator console</span>
+        <span>Propel · PB-01 suppression-aware operator console</span>
         <span>Polling every 5 seconds · verification remains telemetry-only</span>
       </footer>
     </main>

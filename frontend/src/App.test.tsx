@@ -49,12 +49,34 @@ const incident: Incident = {
       negative_reasons: [],
     },
   },
+  suppression_reason: null,
+  suppression_source: null,
+  suppression_external_id: null,
   detected_at: '2026-08-04T01:00:00Z',
   updated_at: '2026-08-04T01:00:00Z',
   resolved_at: null,
   ticket_id: 'ticket-1',
   ticket_status: 'DETECTED',
   assigned_crew: null,
+}
+
+const suppressedIncident: Incident = {
+  ...incident,
+  incident_id: 'incident-suppressed',
+  fingerprint: 'sensor:DT-001:DEV-P-002',
+  status: 'SUPPRESSED',
+  classification: 'SENSOR_ANOMALY',
+  suspected_asset_type: 'DEVICE',
+  suspected_asset_id: 'DEV-P-002',
+  affected_pole_count: 1,
+  affected_pole_ids: ['P-002'],
+  precision: 'POLE_LEVEL',
+  confidence_reason: 'Downstream poles remain live after the isolated dark report.',
+  suppression_reason: 'The dark report contradicts fresh downstream live telemetry.',
+  suppression_source: 'telemetry-consistency-rule',
+  suppression_external_id: null,
+  ticket_id: null,
+  ticket_status: null,
 }
 
 const ticket: Ticket = {
@@ -107,14 +129,24 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
-function installFetchRouter(options?: { incidents?: Incident[]; unhealthy?: boolean }) {
+function installFetchRouter(options?: {
+  incidents?: Incident[]
+  suppressedIncidents?: Incident[]
+  unhealthy?: boolean
+}) {
   const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url === '/health') {
       return jsonResponse(options?.unhealthy ? { ...health, status: 'unhealthy' } : health)
     }
-    if (url.startsWith('/api/incidents?')) return jsonResponse(options?.incidents ?? [incident])
+    if (url === '/api/incidents?status=ACTIVE&limit=100') {
+      return jsonResponse(options?.incidents ?? [incident])
+    }
+    if (url === '/api/incidents?status=SUPPRESSED&limit=100') {
+      return jsonResponse(options?.suppressedIncidents ?? [])
+    }
     if (url === '/api/incidents/incident-1') return jsonResponse(incident)
+    if (url === '/api/incidents/incident-suppressed') return jsonResponse(suppressedIncident)
     if (url === '/api/tickets/ticket-1' && init?.method !== 'POST') return jsonResponse(ticket)
     if (url === '/api/tickets/ticket-1/acknowledge') {
       return jsonResponse({
@@ -216,6 +248,19 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'No incident selected' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Inject fixed fault' })).toBeEnabled()
     expect(screen.getByText(/Last refresh/)).toBeInTheDocument()
+  })
+
+  it('shows a suppressed sensor diagnostic without ticket actions', async () => {
+    installFetchRouter({ incidents: [], suppressedIncidents: [suppressedIncident] })
+    renderApp()
+
+    expect(await screen.findByRole('heading', { name: 'DEV-P-002' })).toBeInTheDocument()
+    expect(screen.getAllByText('SENSOR ANOMALY')).toHaveLength(2)
+    expect(screen.getAllByText('SUPPRESSED')).toHaveLength(2)
+    expect(screen.getByText('No dispatch ticket created')).toBeInTheDocument()
+    expect(screen.getByText(/telemetry-consistency-rule/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Acknowledge incident' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inject fixed fault' })).toBeEnabled()
   })
 
   it('presents backend health failure instead of claiming data is current', async () => {

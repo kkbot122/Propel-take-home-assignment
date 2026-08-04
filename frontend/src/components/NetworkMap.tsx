@@ -55,7 +55,10 @@ export function NetworkMap({ poles, topology, selectedIncident }: NetworkMapProp
     () => new Map(poles.map((pole) => [pole.pole_id, pole])),
     [poles],
   )
-  const selectedSpan = selectedIncident?.suspected_asset_id.split('->') ?? []
+  const selectedSpan =
+    selectedIncident?.suspected_asset_type === 'SPAN'
+      ? selectedIncident.suspected_asset_id.split('->')
+      : []
   const focusPoints = useMemo<LatLngExpression[]>(() => {
     const networkPoints = poles.map(
       (pole) => [pole.latitude, pole.longitude] satisfies LatLngExpression,
@@ -147,7 +150,7 @@ export function NetworkMap({ poles, topology, selectedIncident }: NetworkMapProp
             }}
           >
             <Tooltip direction="bottom" offset={[0, 16]} permanent>
-              Probable fault
+              {selectedIncident.status === 'SUPPRESSED' ? 'Suppressed diagnostic' : 'Probable fault'}
             </Tooltip>
           </CircleMarker>
         )}

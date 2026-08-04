@@ -35,6 +35,7 @@ from propel.domain.enums import (
     LocalizationPrecision,
     PoleStatus,
     ProcessingOutcome,
+    ScheduledOutageScope,
     SimulatorFaultStatus,
     SuspectedAssetType,
     TelemetryEventType,
@@ -225,6 +226,39 @@ class TopologyEdge(Base):
     topology_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
 
 
+class ScheduledOutage(Base):
+    __tablename__ = "scheduled_outages"
+    __table_args__ = (
+        UniqueConstraint("outage_id", name="uq_scheduled_outages_outage_id"),
+        CheckConstraint("ends_at > starts_at", name="valid_time_window"),
+        CheckConstraint("length(outage_id) > 0", name="nonempty_outage_id"),
+        CheckConstraint("length(scope_id) > 0", name="nonempty_scope_id"),
+        CheckConstraint("length(source) > 0", name="nonempty_source"),
+        CheckConstraint("length(reason) > 0", name="nonempty_reason"),
+        Index(
+            "ix_scheduled_outages_scope_window",
+            "scope",
+            "scope_id",
+            "starts_at",
+            "ends_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    outage_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope: Mapped[ScheduledOutageScope] = mapped_column(
+        text_enum(ScheduledOutageScope, "scheduled_outage_scope"), nullable=False
+    )
+    scope_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    source: Mapped[str] = mapped_column(String(120), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class TelemetryEvent(Base):
     __tablename__ = "telemetry_events"
     __table_args__ = (
@@ -351,10 +385,14 @@ class Incident(Base):
         CheckConstraint("latitude BETWEEN -90 AND 90", name="latitude_range"),
         CheckConstraint("longitude BETWEEN -180 AND 180", name="longitude_range"),
         Index(
-            "uq_incidents_active_fingerprint",
+            "uq_incidents_current_fingerprint",
             "fingerprint",
             unique=True,
-            postgresql_where=text("status = 'ACTIVE'"),
+            postgresql_where=text("status IN ('ACTIVE', 'SUPPRESSED')"),
+        ),
+        CheckConstraint(
+            "status <> 'SUPPRESSED' OR suppression_reason IS NOT NULL",
+            name="suppressed_incident_has_reason",
         ),
         Index("ix_incidents_status_detected_at", "status", "detected_at"),
     )
@@ -385,6 +423,9 @@ class Incident(Base):
     evidence: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
+    suppression_reason: Mapped[str | None] = mapped_column(Text)
+    suppression_source: Mapped[str | None] = mapped_column(String(120))
+    suppression_external_id: Mapped[str | None] = mapped_column(String(64))
     detected_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

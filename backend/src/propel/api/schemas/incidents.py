@@ -57,6 +57,9 @@ class IncidentResponse(BaseModel):
     confidence_score: Annotated[int, Field(ge=0, le=100)]
     confidence_reason: str
     evidence: dict[str, Any]
+    suppression_reason: str | None
+    suppression_source: str | None
+    suppression_external_id: str | None
     detected_at: datetime
     updated_at: datetime
     resolved_at: datetime | None

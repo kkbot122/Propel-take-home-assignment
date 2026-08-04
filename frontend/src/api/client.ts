@@ -43,6 +43,8 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => requestJson<HealthResponse>('/health'),
   incidents: () => requestJson<Incident[]>('/api/incidents?status=ACTIVE&limit=100'),
+  suppressedIncidents: () =>
+    requestJson<Incident[]>('/api/incidents?status=SUPPRESSED&limit=100'),
   incident: (incidentId: string) =>
     requestJson<Incident>(`/api/incidents/${incidentId}`),
   ticket: (ticketId: string) => requestJson<Ticket>(`/api/tickets/${ticketId}`),

@@ -5,7 +5,12 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from propel.domain.enums import DeviceHealthStatus, PoleStatus, TopologySource
+from propel.domain.enums import (
+    DeviceHealthStatus,
+    PoleStatus,
+    ScheduledOutageScope,
+    TopologySource,
+)
 from propel.infra.database.models import (
     Device,
     DeviceBinding,
@@ -14,6 +19,7 @@ from propel.infra.database.models import (
     Feeder,
     Pole,
     PoleState,
+    ScheduledOutage,
     Substation,
     TopologyEdge,
 )
@@ -29,6 +35,7 @@ class SeedSummary:
     bindings: int
     topology_edges: int
     live_pole_states: int
+    scheduled_outages: int
 
 
 def require_seed_value[T](value: T | None, label: str) -> T:
@@ -195,6 +202,20 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
             .on_conflict_do_nothing(constraint="uq_topology_edges_child_version")
         )
 
+    await session.execute(
+        insert(ScheduledOutage)
+        .values(
+            outage_id="SO-SEED-001",
+            scope=ScheduledOutageScope.SPAN,
+            scope_id="P-003->P-004",
+            starts_at=datetime(2099, 1, 1, 10, 0, tzinfo=UTC),
+            ends_at=datetime(2099, 1, 1, 12, 0, tzinfo=UTC),
+            source="deterministic-seed",
+            reason="Future maintenance fixture; inactive during normal demonstrations",
+        )
+        .on_conflict_do_nothing(constraint="uq_scheduled_outages_outage_id")
+    )
+
     binding_count = await session.scalar(
         select(func.count(DeviceBinding.id)).where(DeviceBinding.device_id.in_(devices.values()))
     )
@@ -208,6 +229,9 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
             PoleState.pole_id.in_(poles.values()), PoleState.state == PoleStatus.LIVE
         )
     )
+    scheduled_outage_count = await session.scalar(
+        select(func.count(ScheduledOutage.id)).where(ScheduledOutage.outage_id == "SO-SEED-001")
+    )
 
     return SeedSummary(
         substations=1,
@@ -218,4 +242,5 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
         bindings=binding_count or 0,
         topology_edges=edge_count or 0,
         live_pole_states=live_count or 0,
+        scheduled_outages=scheduled_outage_count or 0,
     )

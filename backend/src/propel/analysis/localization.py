@@ -1,12 +1,15 @@
 from collections import defaultdict
+from dataclasses import replace
 from datetime import timedelta
 
 from propel.analysis.models import (
     CandidateEvidence,
+    CandidateSuppression,
     ConfidenceComponents,
     FaultCandidate,
     NetworkSnapshot,
     PoleEvidence,
+    ScheduledOutageWindow,
     TopologySpan,
 )
 from propel.domain.enums import (
@@ -14,11 +17,14 @@ from propel.domain.enums import (
     FaultClass,
     LocalizationPrecision,
     PoleStatus,
+    ScheduledOutageScope,
     SuspectedAssetType,
     TopologySource,
 )
 
 DEFAULT_LIVE_FRESHNESS = timedelta(minutes=32)
+DEFAULT_SCHEDULE_EARLY_GRACE = timedelta(minutes=10)
+DEFAULT_SCHEDULE_OVERRUN_GRACE = timedelta(minutes=40)
 CORRELATION_WINDOW_SECONDS = 10.0
 
 
@@ -30,6 +36,8 @@ def localize_known_topology(
     snapshot: NetworkSnapshot,
     *,
     live_freshness: timedelta = DEFAULT_LIVE_FRESHNESS,
+    schedule_early_grace: timedelta = DEFAULT_SCHEDULE_EARLY_GRACE,
+    schedule_overrun_grace: timedelta = DEFAULT_SCHEDULE_OVERRUN_GRACE,
 ) -> list[FaultCandidate]:
     poles = _pole_index(snapshot)
     spans = tuple(span for span in snapshot.spans if span.source == TopologySource.SURVEYED)
@@ -49,9 +57,128 @@ def localize_known_topology(
         if child.state != PoleStatus.DARK or child.state_received_at is None:
             continue
         subtree_ids = _collect_subtree(span.child_pole_id, children)
-        candidates.append(_build_candidate(snapshot, span, poles, subtree_ids))
+        candidate = _build_candidate(snapshot, span, poles, subtree_ids)
+        candidates.append(
+            _classify_candidate(
+                snapshot,
+                candidate,
+                poles,
+                live_freshness=live_freshness,
+                schedule_early_grace=schedule_early_grace,
+                schedule_overrun_grace=schedule_overrun_grace,
+            )
+        )
 
     return sorted(candidates, key=lambda candidate: candidate.suspected_asset_id)
+
+
+def _classify_candidate(
+    snapshot: NetworkSnapshot,
+    candidate: FaultCandidate,
+    poles: dict[str, PoleEvidence],
+    *,
+    live_freshness: timedelta,
+    schedule_early_grace: timedelta,
+    schedule_overrun_grace: timedelta,
+) -> FaultCandidate:
+    scheduled_outage = _matching_scheduled_outage(
+        snapshot,
+        candidate,
+        early_grace=schedule_early_grace,
+        overrun_grace=schedule_overrun_grace,
+    )
+    if scheduled_outage is not None:
+        reason = (
+            f"Observation overlaps scheduled outage {scheduled_outage.outage_id} "
+            f"for {scheduled_outage.scope.value} {scheduled_outage.scope_id}: "
+            f"{scheduled_outage.reason}"
+        )
+        return replace(
+            candidate,
+            classification=FaultClass.SCHEDULED_OUTAGE,
+            confidence_reason=reason,
+            evidence=replace(
+                candidate.evidence,
+                positive_reasons=candidate.evidence.positive_reasons
+                + (f"scheduled outage {scheduled_outage.outage_id} covers this observation",),
+            ),
+            suppression=CandidateSuppression(
+                reason=reason,
+                source=scheduled_outage.source,
+                external_id=scheduled_outage.outage_id,
+            ),
+        )
+
+    child = poles[candidate.child_pole_id]
+    credible_live_descendants = tuple(
+        pole_id
+        for pole_id in candidate.evidence.post_onset_live_contradictions
+        if _is_recent_live(poles[pole_id], snapshot, live_freshness)
+    )
+    isolated_dark_pole = candidate.evidence.dark_pole_count == 1
+    if isolated_dark_pole and credible_live_descendants and child.device is not None:
+        reason = (
+            f"Pole {child.pole_id} reports DARK while surveyed downstream poles "
+            f"{', '.join(credible_live_descendants)} have fresh post-onset LIVE telemetry."
+        )
+        return replace(
+            candidate,
+            classification=FaultClass.SENSOR_ANOMALY,
+            suspected_asset_type=SuspectedAssetType.DEVICE,
+            suspected_asset_id=child.device.device_id,
+            precision=LocalizationPrecision.POLE_LEVEL,
+            latitude=child.latitude,
+            longitude=child.longitude,
+            pin_code=child.pin_code,
+            confidence_reason=reason,
+            evidence=replace(
+                candidate.evidence,
+                positive_reasons=candidate.evidence.positive_reasons
+                + (
+                    "surveyed dependency makes downstream LIVE telemetry physically "
+                    "inconsistent with an upstream power loss",
+                ),
+            ),
+            suppression=CandidateSuppression(
+                reason=reason,
+                source="telemetry-consistency-rule",
+            ),
+        )
+    return candidate
+
+
+def _matching_scheduled_outage(
+    snapshot: NetworkSnapshot,
+    candidate: FaultCandidate,
+    *,
+    early_grace: timedelta,
+    overrun_grace: timedelta,
+) -> ScheduledOutageWindow | None:
+    scope_priority = {
+        ScheduledOutageScope.SPAN: 0,
+        ScheduledOutageScope.DISTRIBUTION_TRANSFORMER: 1,
+        ScheduledOutageScope.FEEDER: 2,
+    }
+
+    def covers(scope: ScheduledOutageScope, scope_id: str) -> bool:
+        if scope == ScheduledOutageScope.SPAN:
+            return scope_id == f"{candidate.parent_pole_id}->{candidate.child_pole_id}"
+        if scope == ScheduledOutageScope.DISTRIBUTION_TRANSFORMER:
+            return scope_id == snapshot.dt_id
+        return scope_id == snapshot.feeder_id
+
+    matches = (
+        outage
+        for outage in snapshot.scheduled_outages
+        if outage.starts_at - early_grace
+        <= candidate.evidence.onset_at
+        < outage.ends_at + overrun_grace
+        and covers(outage.scope, outage.scope_id)
+    )
+    return next(
+        iter(sorted(matches, key=lambda outage: (scope_priority[outage.scope], outage.outage_id))),
+        None,
+    )
 
 
 def _pole_index(snapshot: NetworkSnapshot) -> dict[str, PoleEvidence]:

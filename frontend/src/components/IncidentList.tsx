@@ -25,10 +25,10 @@ export function IncidentList({
     <section className="panel incident-panel" aria-labelledby="incidents-title">
       <div className="panel-heading">
         <div>
-          <p className="section-label">Operations queue</p>
-          <h2 id="incidents-title">Active incidents</h2>
+          <p className="section-label">Operations and diagnostics</p>
+          <h2 id="incidents-title">Current findings</h2>
         </div>
-        <span className="count-badge" aria-label={`${incidents.length} active incidents`}>
+        <span className="count-badge" aria-label={`${incidents.length} current findings`}>
           {incidents.length}
         </span>
       </div>
@@ -68,8 +68,16 @@ export function IncidentList({
                     <span>{incident.precision.replaceAll('_', ' ')}</span>
                   </span>
                   <span className="incident-card-footer">
-                    <span className={`status-pill status-${incident.ticket_status?.toLowerCase()}`}>
-                      {incident.ticket_status?.replaceAll('_', ' ') ?? 'NO TICKET'}
+                    <span
+                      className={`status-pill status-${
+                        incident.status === 'SUPPRESSED'
+                          ? 'suppressed'
+                          : incident.ticket_status?.toLowerCase()
+                      }`}
+                    >
+                      {incident.status === 'SUPPRESSED'
+                        ? 'SUPPRESSED'
+                        : (incident.ticket_status?.replaceAll('_', ' ') ?? 'NO TICKET')}
                     </span>
                     <span className="confidence-mini">{incident.confidence_score}% evidence</span>
                   </span>

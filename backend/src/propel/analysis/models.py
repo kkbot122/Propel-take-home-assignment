@@ -6,6 +6,7 @@ from propel.domain.enums import (
     FaultClass,
     LocalizationPrecision,
     PoleStatus,
+    ScheduledOutageScope,
     SuspectedAssetType,
     TopologySource,
 )
@@ -42,12 +43,47 @@ class TopologySpan:
 
 
 @dataclass(frozen=True, slots=True)
+class ScheduledOutageWindow:
+    outage_id: str
+    scope: ScheduledOutageScope
+    scope_id: str
+    starts_at: datetime
+    ends_at: datetime
+    source: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if self.starts_at.utcoffset() is None or self.ends_at.utcoffset() is None:
+            raise ValueError("scheduled outage timestamps must be timezone-aware")
+        if self.ends_at <= self.starts_at:
+            raise ValueError("scheduled outage end must be after its start")
+        if not self.outage_id or not self.scope_id or not self.source or not self.reason:
+            raise ValueError("scheduled outage identifiers, source, and reason are required")
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateSuppression:
+    reason: str
+    source: str
+    external_id: str | None = None
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {
+            "reason": self.reason,
+            "source": self.source,
+            "external_id": self.external_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkSnapshot:
     dt_id: str
+    feeder_id: str
     topology_version: int
     analysis_at: datetime
     poles: tuple[PoleEvidence, ...]
     spans: tuple[TopologySpan, ...]
+    scheduled_outages: tuple[ScheduledOutageWindow, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,3 +154,4 @@ class FaultCandidate:
     confidence_level: str
     confidence_reason: str
     evidence: CandidateEvidence
+    suppression: CandidateSuppression | None = None

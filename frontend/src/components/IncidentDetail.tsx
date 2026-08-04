@@ -89,6 +89,7 @@ export function IncidentDetail({
   }
 
   const status = ticket?.status ?? incident.ticket_status
+  const suppressed = incident.status === 'SUPPRESSED'
   const restorationPending =
     status === 'RESOLVED' && ticket?.restoration_status === 'REPAIR_NOT_VERIFIED'
 
@@ -96,11 +97,13 @@ export function IncidentDetail({
     <section className="panel detail-panel" aria-labelledby="detail-title">
       <div className="detail-header">
         <div>
-          <p className="section-label">Probable root fault</p>
+          <p className="section-label">
+            {suppressed ? 'Suppressed diagnostic' : 'Probable root fault'}
+          </p>
           <h2 id="detail-title">{incident.suspected_asset_id.replace('->', ' → ')}</h2>
         </div>
-        <span className={`status-pill status-${status?.toLowerCase()}`}>
-          {status ? statusLabel(status) : 'NO TICKET'}
+        <span className={`status-pill status-${suppressed ? 'suppressed' : status?.toLowerCase()}`}>
+          {suppressed ? 'SUPPRESSED' : status ? statusLabel(status) : 'NO TICKET'}
         </span>
       </div>
 
@@ -131,7 +134,9 @@ export function IncidentDetail({
 
       <section className="evidence-section" aria-labelledby="evidence-title">
         <div className="subheading-row">
-          <h3 id="evidence-title">Why Propel chose this span</h3>
+          <h3 id="evidence-title">
+            {suppressed ? 'Why Propel suppressed dispatch' : 'Why Propel chose this span'}
+          </h3>
           <span>{incident.affected_pole_ids.join(', ')}</span>
         </div>
         <ul className="evidence-list positive-evidence">
@@ -155,6 +160,19 @@ export function IncidentDetail({
           <p className="no-contradictions">No contradictory post-onset evidence.</p>
         )}
       </section>
+
+      {suppressed && (
+        <div className="suppression-notice" role="status">
+          <strong>No dispatch ticket created</strong>
+          <span>{incident.suppression_reason}</span>
+          <small>
+            Source: {incident.suppression_source ?? 'unknown'}
+            {incident.suppression_external_id
+              ? ` · Reference: ${incident.suppression_external_id}`
+              : ''}
+          </small>
+        </div>
+      )}
 
       {restorationPending && (
         <div className="restoration-notice" role="status">

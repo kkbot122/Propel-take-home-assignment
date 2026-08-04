@@ -22,7 +22,7 @@ Optimize in this order:
 
 ## Progress dashboard
 
-- [ ] PB-01 — Sensor anomaly and scheduled-outage suppression
+- [x] PB-01 — Sensor anomaly and scheduled-outage suppression
 - [ ] PB-02 — DT and feeder fault classification
 - [ ] PB-03 — Multiple simultaneous surveyed faults
 - [ ] PB-04 — Missing-device corridors and degraded precision
@@ -83,37 +83,37 @@ outage must not create a normal dispatch ticket.
 
 ### Implementation
 
-- [ ] Add immutable scheduled-outage domain values with UTC start/end windows,
+- [x] Add immutable scheduled-outage domain values with UTC start/end windows,
       scope, source, and external identifiers.
-- [ ] Add the minimum Alembic migration and repository for scheduled-outage data.
-- [ ] Add deterministic scheduled-outage seed records and idempotent seed behavior.
-- [ ] Include relevant scheduled-outage matches in the analysis snapshot.
-- [ ] Classify an isolated dark pole with credible live descendants as
+- [x] Add the minimum Alembic migration and repository for scheduled-outage data.
+- [x] Add deterministic scheduled-outage seed records and idempotent seed behavior.
+- [x] Include relevant scheduled-outage matches in the analysis snapshot.
+- [x] Classify an isolated dark pole with credible live descendants as
       `SENSOR_ANOMALY`.
-- [ ] Require evidence that separates a sensor anomaly from a terminal-pole fault.
-- [ ] Classify a candidate covered by an active planned window as
+- [x] Require evidence that separates a sensor anomaly from a terminal-pole fault.
+- [x] Classify a candidate covered by an active planned window as
       `SCHEDULED_OUTAGE`.
-- [ ] Define overlap behavior for span, DT, and feeder outage scopes.
-- [ ] Suppress normal actionable ticket creation for both classifications.
-- [ ] Preserve the classification, evidence, suppression reason, and source in
+- [x] Define overlap behavior for span, DT, and feeder outage scopes.
+- [x] Suppress normal actionable ticket creation for both classifications.
+- [x] Preserve the classification, evidence, suppression reason, and source in
       durable audit data.
-- [ ] Expose suppression state and reason through the incident/read API without
+- [x] Expose suppression state and reason through the incident/read API without
       presenting it as an active dispatch ticket.
-- [ ] Show a concise suppressed/anomaly state in the operator console.
+- [x] Show a concise suppressed/anomaly state in the operator console.
 
 ### Required tests
 
-- [ ] One dark internal pole with fresh live descendants creates no span ticket.
-- [ ] A real terminal-pole loss is not automatically treated as a dead sensor.
-- [ ] Silence produces `STALE`, never `SENSOR_ANOMALY` or `DARK` by itself.
-- [ ] An active scheduled outage suppresses a matching normal fault ticket.
-- [ ] An expired, future, or non-overlapping schedule does not suppress a fault.
-- [ ] A genuine surveyed span fault still creates exactly one normal ticket.
-- [ ] Suppression decisions are deterministic when snapshot order changes.
+- [x] One dark internal pole with fresh live descendants creates no span ticket.
+- [x] A real terminal-pole loss is not automatically treated as a dead sensor.
+- [x] Silence produces `STALE`, never `SENSOR_ANOMALY` or `DARK` by itself.
+- [x] An active scheduled outage suppresses a matching normal fault ticket.
+- [x] An expired, future, or non-overlapping schedule does not suppress a fault.
+- [x] A genuine surveyed span fault still creates exactly one normal ticket.
+- [x] Suppression decisions are deterministic when snapshot order changes.
 
 ### Exit condition
 
-- [ ] The fixed sensor-anomaly and scheduled-outage scenarios are explainable,
+- [x] The fixed sensor-anomaly and scheduled-outage scenarios are explainable,
       auditable, and produce zero false normal dispatch tickets.
 
 ### Deliberately excluded

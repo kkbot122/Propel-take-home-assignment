@@ -17,9 +17,11 @@ from propel.analysis.models import NetworkSnapshot
 from propel.api.app import create_app
 from propel.domain.enums import (
     DeviceHealthStatus,
+    FaultClass,
     IncidentStatus,
     LocalizationPrecision,
     PoleStatus,
+    ScheduledOutageScope,
     SimulatorFaultStatus,
     TelemetryEventType,
     TelemetryOrigin,
@@ -32,6 +34,7 @@ from propel.infra.database.models import (
     Incident,
     Pole,
     PoleState,
+    ScheduledOutage,
     SimulatedFault,
     TelemetryEvent,
     Ticket,
@@ -77,6 +80,7 @@ class AnalysisHarness:
     event_ids: set[UUID] = field(default_factory=set)
     incident_ids: set[UUID] = field(default_factory=set)
     simulated_fault_ids: set[UUID] = field(default_factory=set)
+    scheduled_outage_ids: set[str] = field(default_factory=set)
 
     async def publish(
         self,
@@ -276,6 +280,12 @@ async def analysis_harness() -> AsyncIterator[AnalysisHarness]:
             harness.dead_letter_stream,
         )
         async with session_factory.begin() as session:
+            if harness.scheduled_outage_ids:
+                await session.execute(
+                    delete(ScheduledOutage).where(
+                        ScheduledOutage.outage_id.in_(harness.scheduled_outage_ids)
+                    )
+                )
             if harness.simulated_fault_ids:
                 await session.execute(
                     delete(SimulatedFault).where(
@@ -512,6 +522,139 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
     assert all(pole.device is not None for pole in snapshot.poles)
     assert len(snapshot.spans) == 4
     assert all(span.source == TopologySource.SURVEYED for span in snapshot.spans)
+
+
+@pytest.mark.asyncio
+async def test_isolated_dark_sensor_is_audited_without_dispatch_ticket(
+    analysis_harness: AnalysisHarness,
+) -> None:
+    base = datetime.now(UTC) - timedelta(seconds=2)
+    consumer = analysis_harness.consumer()
+    await consumer.ensure_group()
+    await analysis_harness.publish("P-001", TelemetryEventType.HEARTBEAT, True, base)
+    await analysis_harness.publish(
+        "P-002", TelemetryEventType.POWER_LOST, False, base + timedelta(milliseconds=100)
+    )
+    await analysis_harness.publish(
+        "P-003", TelemetryEventType.HEARTBEAT, True, base + timedelta(milliseconds=200)
+    )
+    assert await consumer.consume_new_once() == 3
+
+    clock = MutableClock(base + timedelta(seconds=11))
+    incident_service = PostgresIncidentService(analysis_harness.engine)
+    scheduler = RedisAnalysisScheduler(
+        analysis_harness.redis,
+        PostgresDtSnapshotRepository(analysis_harness.engine),
+        due_set_name=analysis_harness.due_set,
+        live_freshness_seconds=1_920,
+        retry_delay_seconds=5,
+        candidate_sink=incident_service,
+        clock=clock,
+    )
+
+    candidates = await scheduler.run_due_once()
+
+    assert len(candidates) == 1
+    assert candidates[0].classification == FaultClass.SENSOR_ANOMALY
+    assert candidates[0].suppression is not None
+    suppressed = next(
+        item
+        for item in await incident_service.list_incidents(status=IncidentStatus.SUPPRESSED)
+        if item.fingerprint == "sensor:DT-001:DEV-P-002"
+    )
+    analysis_harness.incident_ids.add(suppressed.incident_id)
+    assert suppressed.ticket_id is None
+    assert suppressed.suppression_source == "telemetry-consistency-rule"
+    assert suppressed.suppression_reason is not None
+
+    repeated = await asyncio.gather(
+        incident_service.persist_candidates(candidates),
+        incident_service.persist_candidates(candidates),
+    )
+    assert {result[0].incident_id for result in repeated} == {suppressed.incident_id}
+    assert all(result[0].ticket_id is None for result in repeated)
+
+    settings = get_settings()
+    async with running_operations_api(settings, incident_service) as client:
+        response = await client.get("/api/incidents", params={"status": "SUPPRESSED"})
+
+    assert response.status_code == 200
+    payload = next(
+        item for item in response.json() if item["incident_id"] == str(suppressed.incident_id)
+    )
+    assert payload["classification"] == "SENSOR_ANOMALY"
+    assert payload["ticket_id"] is None
+    assert payload["suppression_reason"] == suppressed.suppression_reason
+
+
+@pytest.mark.asyncio
+async def test_active_schedule_is_audited_without_dispatch_ticket(
+    analysis_harness: AnalysisHarness,
+) -> None:
+    base = datetime.now(UTC) - timedelta(seconds=2)
+    outage_id = f"SO-TEST-{uuid4().hex}"
+    analysis_harness.scheduled_outage_ids.add(outage_id)
+    session_factory = async_sessionmaker(analysis_harness.engine, expire_on_commit=False)
+    async with session_factory.begin() as session:
+        session.add(
+            ScheduledOutage(
+                outage_id=outage_id,
+                scope=ScheduledOutageScope.SPAN,
+                scope_id="P-001->P-002",
+                starts_at=base - timedelta(minutes=5),
+                ends_at=base + timedelta(minutes=5),
+                source="integration-test-feed",
+                reason="Planned jumper replacement",
+            )
+        )
+
+    consumer = analysis_harness.consumer()
+    await consumer.ensure_group()
+    await analysis_harness.publish("P-001", TelemetryEventType.HEARTBEAT, True, base)
+    for index, pole_id in enumerate(("P-002", "P-003", "P-004"), start=1):
+        await analysis_harness.publish(
+            pole_id,
+            TelemetryEventType.POWER_LOST,
+            False,
+            base + timedelta(milliseconds=index * 100),
+        )
+    assert await consumer.consume_new_once() == 4
+
+    scheduler = RedisAnalysisScheduler(
+        analysis_harness.redis,
+        PostgresDtSnapshotRepository(analysis_harness.engine),
+        due_set_name=analysis_harness.due_set,
+        live_freshness_seconds=1_920,
+        retry_delay_seconds=5,
+        candidate_sink=PostgresIncidentService(analysis_harness.engine),
+        clock=MutableClock(base + timedelta(seconds=11)),
+    )
+    candidates = await scheduler.run_due_once()
+
+    assert len(candidates) == 1
+    assert candidates[0].classification == FaultClass.SCHEDULED_OUTAGE
+    assert candidates[0].suppression is not None
+    assert candidates[0].suppression.external_id == outage_id
+    incident_service = PostgresIncidentService(analysis_harness.engine)
+    suppressed = next(
+        item
+        for item in await incident_service.list_incidents(status=IncidentStatus.SUPPRESSED)
+        if item.suppression_external_id == outage_id
+    )
+    analysis_harness.incident_ids.add(suppressed.incident_id)
+    assert suppressed.ticket_id is None
+    assert suppressed.classification == FaultClass.SCHEDULED_OUTAGE
+    assert suppressed.suppression_source == "integration-test-feed"
+
+    async with session_factory() as session:
+        assert (
+            await session.scalar(
+                select(func.count(Ticket.ticket_id)).where(
+                    Ticket.incident_id == suppressed.incident_id
+                )
+            )
+            == 0
+        )
 
 
 @pytest.mark.asyncio

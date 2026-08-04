@@ -11,6 +11,7 @@ class FaultClass(StrEnum):
 
 
 class LocalizationPrecision(StrEnum):
+    POLE_LEVEL = "POLE_LEVEL"
     EXACT_SPAN = "EXACT_SPAN"
     PROBABLE_SPAN = "PROBABLE_SPAN"
     CORRIDOR = "CORRIDOR"
@@ -78,6 +79,13 @@ class IncidentStatus(StrEnum):
 
 
 class SuspectedAssetType(StrEnum):
+    DEVICE = "DEVICE"
+    SPAN = "SPAN"
+    DISTRIBUTION_TRANSFORMER = "DISTRIBUTION_TRANSFORMER"
+    FEEDER = "FEEDER"
+
+
+class ScheduledOutageScope(StrEnum):
     SPAN = "SPAN"
     DISTRIBUTION_TRANSFORMER = "DISTRIBUTION_TRANSFORMER"
     FEEDER = "FEEDER"
