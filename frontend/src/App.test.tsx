@@ -10,6 +10,8 @@ import type {
   NetworkSubdivision,
   NetworkTopology,
   OperationalDiagnostics,
+  SimulatedFault,
+  SimulatorScenario,
   Ticket,
 } from './api/types'
 
@@ -212,6 +214,100 @@ const ticket: Ticket = {
   ],
 }
 
+const simulatorScenarios: SimulatorScenario[] = [
+  {
+    scenario_id: 'surveyed-span',
+    description: 'Surveyed live-to-dark boundary with complete telemetry',
+    fault_count: 1,
+    scheduled: false,
+    restoration_fraction: 1,
+    noise_modes: [],
+  },
+  {
+    scenario_id: 'inferred-span',
+    description: 'Hidden physical span on a topology-missing transformer',
+    fault_count: 1,
+    scheduled: false,
+    restoration_fraction: 1,
+    noise_modes: [],
+  },
+  {
+    scenario_id: 'dt-fault',
+    description: 'Transformer-wide loss with partial sensor coverage',
+    fault_count: 1,
+    scheduled: false,
+    restoration_fraction: 1,
+    noise_modes: [],
+  },
+  {
+    scenario_id: 'feeder-fault',
+    description: 'Correlated DT-wide loss across one feeder',
+    fault_count: 1,
+    scheduled: false,
+    restoration_fraction: 1,
+    noise_modes: [],
+  },
+  {
+    scenario_id: 'scheduled-span',
+    description: 'Span loss overlapping a planned-work window',
+    fault_count: 1,
+    scheduled: true,
+    restoration_fraction: 1,
+    noise_modes: [],
+  },
+  {
+    scenario_id: 'noisy-span',
+    description: 'Loss messages include omission, duplication, delay, and reordering',
+    fault_count: 1,
+    scheduled: false,
+    restoration_fraction: 1,
+    noise_modes: ['omission', 'duplication', 'delay', 'reordering'],
+  },
+  {
+    scenario_id: 'dead-sensor',
+    description: 'One healthy powered pole device stops reporting without a grid fault',
+    fault_count: 0,
+    scheduled: false,
+    restoration_fraction: 1,
+    noise_modes: [],
+  },
+  {
+    scenario_id: 'simultaneous-spans',
+    description: 'Three independent physical span faults',
+    fault_count: 3,
+    scheduled: false,
+    restoration_fraction: 1,
+    noise_modes: [],
+  },
+  {
+    scenario_id: 'partial-restoration',
+    description: 'Only half of delivered loss observations restore',
+    fault_count: 1,
+    scheduled: false,
+    restoration_fraction: 0.5,
+    noise_modes: [],
+  },
+]
+
+function simulatedSpanFault(index = 1): SimulatedFault {
+  return {
+    fault_id: `fault-${index}`,
+    fault_type: 'SPAN_FAULT',
+    feeder_id: 'FDR-001',
+    dt_id: `DT-00${index}`,
+    parent_pole_id: index === 1 ? 'P-001' : `P-${index}01`,
+    child_pole_id: index === 1 ? 'P-002' : `P-${index}02`,
+    status: 'ACTIVE',
+    deenergized_pole_ids: [index === 1 ? 'P-002' : `P-${index}02`],
+    injected_at: '2026-08-04T01:00:00Z',
+    injection_telemetry_at: '2026-08-04T01:00:00Z',
+    repaired_at: null,
+    emitted_event_ids: [`event-${index}`],
+    restored_pole_ids: [],
+    restoration_fraction: null,
+  }
+}
+
 const poles: NetworkPole[] = [
   {
     pole_id: 'P-001',
@@ -364,6 +460,25 @@ function installFetchRouter(options?: {
     }
     if (url === '/api/network/subdivision/poles') return jsonResponse(poles)
     if (url === '/api/network/subdivision') return jsonResponse(networkSubdivision)
+    if (url === '/api/simulator/scenarios') return jsonResponse(simulatorScenarios)
+    if (url.startsWith('/api/simulator/scenarios/') && url.endsWith('/run')) {
+      const scenarioId = url.split('/')[4]
+      const scenario = simulatorScenarios.find((item) => item.scenario_id === scenarioId)
+      const faults = scenarioId === 'simultaneous-spans'
+        ? [simulatedSpanFault(1), simulatedSpanFault(2), simulatedSpanFault(3)]
+        : scenarioId === 'dead-sensor'
+          ? []
+          : [simulatedSpanFault()]
+      return jsonResponse({
+        scenario_id: scenarioId,
+        description: scenario?.description ?? scenarioId,
+        faults,
+        restoration_fraction: scenario?.restoration_fraction ?? 1,
+        failed_device_id: scenarioId === 'dead-sensor' ? 'DEV-P-001' : null,
+        failed_pole_id: scenarioId === 'dead-sensor' ? 'P-001' : null,
+        scheduled_outage_id: scenarioId === 'scheduled-span' ? 'planned-1' : null,
+      })
+    }
     if (url === '/api/simulator/faults/fault-1/repair') {
       return jsonResponse({
         fault_id: 'fault-1',
@@ -456,7 +571,7 @@ describe('App', () => {
     expect(await screen.findByRole('button', { name: 'Acknowledge incident' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: 'Assign crew' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Claim physical repair' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Send selected repair telemetry' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Complete repair' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Operational diagnostics' })).toBeInTheDocument()
     expect(screen.getByText('No dependency, queue, retry, or dead-letter warnings.')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Inspect score components and caps'))
@@ -489,18 +604,19 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'P-001 → P-002' })).toBeInTheDocument()
   })
 
-  it('shows a healthy empty state and allows fixed-scenario injection', async () => {
+  it('shows a healthy empty state with a compact scenario catalog', async () => {
     installFetchRouter({ incidents: [] })
     renderApp()
 
     expect(await screen.findByRole('heading', { name: 'No active outages' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'No incident selected' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Inject span fault A' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Inject span fault B' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Inject inferred span' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Inject corridor fault' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Inject DT fault' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Inject feeder fault' })).toBeEnabled()
+    const scenarioPicker = await screen.findByRole('combobox', { name: 'Scenario' })
+    await screen.findByRole('option', { name: 'Three simultaneous faults' })
+    expect(scenarioPicker).toHaveValue('surveyed-span')
+    expect(scenarioPicker.querySelectorAll('option')).toHaveLength(9)
+    expect(screen.getByRole('option', { name: 'Three simultaneous faults' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Run scenario' })).toBeEnabled()
+    expect(screen.queryByText('Backbone quick actions')).not.toBeInTheDocument()
     expect(screen.getByText(/Last refresh/)).toBeInTheDocument()
   })
 
@@ -537,7 +653,7 @@ describe('App', () => {
     expect(screen.getByText('No dispatch ticket created')).toBeInTheDocument()
     expect(screen.getByText(/telemetry-consistency-rule/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Acknowledge incident' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Inject span fault A' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Run scenario' })).toBeEnabled()
   })
 
   it('labels inferred topology and withholds exact-span precision', async () => {
@@ -555,20 +671,17 @@ describe('App', () => {
     const fetchMock = installFetchRouter({ incidents: [] })
     renderApp()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Inject inferred span' }))
+    const scenarioPicker = await screen.findByRole('combobox', { name: 'Scenario' })
+    await screen.findByRole('option', { name: 'Inferred span fault' })
+    fireEvent.change(scenarioPicker, {
+      target: { value: 'inferred-span' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run scenario' }))
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/simulator/faults',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({
-            fault_type: 'SPAN_FAULT',
-            dt_id: 'DT-003',
-            parent_pole_id: 'P-201',
-            child_pole_id: 'P-202',
-          }),
-        }),
+        '/api/simulator/scenarios/inferred-span/run',
+        expect.objectContaining({ method: 'POST' }),
       ),
     )
   })
@@ -577,20 +690,22 @@ describe('App', () => {
     const fetchMock = installFetchRouter({ incidents: [] })
     renderApp()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Inject feeder fault' }))
+    const scenarioPicker = await screen.findByRole('combobox', { name: 'Scenario' })
+    await screen.findByRole('option', { name: 'Feeder fault' })
+    fireEvent.change(scenarioPicker, {
+      target: { value: 'feeder-fault' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run scenario' }))
 
-    expect(await screen.findByText(/FEEDER FAULT injected/)).toBeInTheDocument()
+    expect(await screen.findByText(/Correlated DT-wide loss across one feeder started/)).toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/simulator/faults',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ fault_type: 'FEEDER_FAULT', feeder_id: 'FDR-001' }),
-      }),
+      '/api/simulator/scenarios/feeder-fault/run',
+      expect.objectContaining({ method: 'POST' }),
     )
   })
 
-  it('requests missing-device noise and explains corridor precision', async () => {
-    const fetchMock = installFetchRouter({ incidents: [corridorIncident] })
+  it('explains corridor precision without exposing legacy injection shortcuts', async () => {
+    installFetchRouter({ incidents: [corridorIncident] })
     renderApp()
 
     expect(await screen.findByRole('heading', { name: 'P-001 ⇢ P-003' })).toBeInTheDocument()
@@ -599,25 +714,7 @@ describe('App', () => {
     expect(screen.getByText('Bounded corridor: P-001 → P-002 → P-003')).toBeInTheDocument()
     expect(screen.getByText('Why Propel chose this corridor')).toBeInTheDocument()
 
-    const injectCorridor = screen.getByRole('button', { name: 'Inject corridor fault' })
-    await waitFor(() => expect(injectCorridor).toBeEnabled())
-    fireEvent.click(injectCorridor)
-
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/simulator/faults',
-        expect.objectContaining({
-          method: 'POST',
-          body: JSON.stringify({
-            fault_type: 'SPAN_FAULT',
-            dt_id: 'DT-001',
-            parent_pole_id: 'P-001',
-            child_pole_id: 'P-002',
-            missing_device_pole_ids: ['P-002'],
-          }),
-        }),
-      ),
-    )
+    expect(screen.queryByRole('button', { name: 'Inject corridor fault' })).not.toBeInTheDocument()
   })
 
   it('maps a corridor incident back to its physical simulator fault for repair', async () => {
@@ -647,7 +744,7 @@ describe('App', () => {
     renderApp()
 
     const repair = await screen.findByRole('button', {
-      name: 'Send selected repair telemetry',
+      name: 'Complete repair',
     })
     await waitFor(() => expect(repair).toBeEnabled())
     fireEvent.click(repair)
@@ -660,32 +757,28 @@ describe('App', () => {
     )
   })
 
-  it('allows two independent span faults and retains both simulator identities', async () => {
+  it('runs three independent faults from the minimal scenario menu', async () => {
     const fetchMock = installFetchRouter({ incidents: [] })
     renderApp()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Inject span fault A' }))
-    expect(await screen.findByText(/SPAN FAULT injected/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Inject span fault A' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Inject span fault B' })).toBeEnabled()
+    const scenarioPicker = await screen.findByRole('combobox', { name: 'Scenario' })
+    await screen.findByRole('option', { name: 'Three simultaneous faults' })
+    fireEvent.change(scenarioPicker, {
+      target: { value: 'simultaneous-spans' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run scenario' }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Inject span fault B' }))
-    expect(screen.getByRole('button', { name: 'Inject feeder fault' })).toBeDisabled()
+    expect(await screen.findByText(/started with 3 physical faults/)).toBeInTheDocument()
+    expect(screen.getByText('3 active faults')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Run scenario' })).toBeDisabled()
     await waitFor(() =>
       expect(
         JSON.parse(sessionStorage.getItem('propel-active-simulator-faults') ?? '[]'),
-      ).toHaveLength(2),
+      ).toHaveLength(3),
     )
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/simulator/faults',
-      expect.objectContaining({
-        body: JSON.stringify({
-          fault_type: 'SPAN_FAULT',
-          dt_id: 'DT-002',
-          parent_pole_id: 'P-101',
-          child_pole_id: 'P-102',
-        }),
-      }),
+      '/api/simulator/scenarios/simultaneous-spans/run',
+      expect.objectContaining({ method: 'POST' }),
     )
   })
 

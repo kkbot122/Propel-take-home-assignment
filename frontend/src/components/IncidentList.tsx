@@ -93,7 +93,7 @@ export function IncidentList({
             ✓
           </span>
           <h3>No active outages</h3>
-          <p>The surveyed DT-001 network is clear. Inject the fixed scenario to begin.</p>
+          <p>The network is clear. Choose a simulator scenario above to begin.</p>
         </div>
       ) : visibleIncidents.length === 0 ? (
         <div className="empty-state compact-empty">
