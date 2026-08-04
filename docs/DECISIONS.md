@@ -2,6 +2,16 @@
 
 Decisions are listed newest first. Dates use `YYYY-MM-DD`.
 
+## 2026-08-04 — Prove the backbone in an isolated clean Compose project
+
+**Chosen:** Keep focused domain and integration tests in the backend test image, component checks in the frontend test image, and one Playwright 1.61 Chromium workflow in a dedicated browser image. `make check` runs all three layers. Clean acceptance uses a separate Compose project, host ports, network, PostgreSQL volume, and Redis volume; it builds and starts from empty state, runs the UI workflow, and removes only those temporary resources afterward.
+
+The browser test injects the fixed surveyed fault, waits through real polling, asserts one incident and ticket, replays the boundary loss sequence, completes only valid operator transitions, proves repair is not verified while poles remain dark, sends restoration telemetry, and observes separate automatic `VERIFIED` and `CLOSED` events. It prints measured single-run timings without presenting them as p95 results.
+
+**Reason:** The acceptance path must exercise the real frontend, API, worker, Redis, and PostgreSQL without making a developer stop or corrupt their normal local stack. Separating test layers keeps failures attributable while the root command remains reproducible from Docker alone.
+
+**Rejected:** Mocking the browser API path, sharing persistent acceptance data with the normal development project, installing browser binaries on the host, and claiming performance percentiles from one smoke run.
+
 ## 2026-08-04 — Keep the operator console polled, state-driven, and read-model-only
 
 **Chosen:** TanStack Query owns incident, ticket, pole-state, topology, and health responses. Active operational data polls every five seconds using the browser-aware default that pauses background refetching. One selected incident synchronizes the queue, surveyed React Leaflet map, evidence panel, and ticket workflow. The selected ticket remains visible after automatic closure so separate `VERIFIED` and `CLOSED` events are observable even after the incident leaves the active queue.

@@ -110,12 +110,12 @@ A task is complete only when:
 
 ## 1.4 Add automated development checks
 
-- [ ] Add one command for backend tests.
-- [ ] Add one command for backend linting.
-- [ ] Add one command for frontend tests.
-- [ ] Add one command for frontend linting.
-- [ ] Add a root-level command or script that runs all checks.
-- [ ] Test: the empty scaffold passes all checks.
+- [x] Add one command for backend tests.
+- [x] Add one command for backend linting.
+- [x] Add one command for frontend tests.
+- [x] Add one command for frontend linting.
+- [x] Add a root-level command or script that runs all checks.
+- [x] Test: the repository passes all checks from containerized tooling.
 
 ---
 

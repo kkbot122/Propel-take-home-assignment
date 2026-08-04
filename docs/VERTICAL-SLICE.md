@@ -61,7 +61,7 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 - [x] VS-06 — Incident grouping and ticket workflow
 - [x] VS-07 — Fault injection, repair, and restoration verification
 - [x] VS-08 — Minimal operator console
-- [ ] VS-09 — End-to-end test and backbone acceptance
+- [x] VS-09 — End-to-end test and backbone acceptance
 
 ---
 
@@ -424,42 +424,44 @@ def localize_known_topology(snapshot: NetworkSnapshot) -> list[FaultCandidate]:
 
 ### Automated checks
 
-- [ ] Add focused unit tests for the known-topology localizer.
-- [ ] Add worker tests for duplicate and stale sequences.
-- [ ] Add ticket-transition and restoration-verification tests.
-- [ ] Add one integration test covering API → Redis → worker → PostgreSQL → incident.
-- [ ] Add one Playwright smoke test for inject → display → ticket actions → repair → close.
-- [ ] Add root commands for backend test/lint and frontend test/lint.
-- [ ] Make all checks runnable with one documented command.
+- [x] Add focused unit tests for the known-topology localizer.
+- [x] Add worker tests for duplicate and stale sequences.
+- [x] Add ticket-transition and restoration-verification tests.
+- [x] Add one integration test covering API → Redis → worker → PostgreSQL → incident.
+- [x] Add one Playwright smoke test for inject → display → ticket actions → repair → close.
+- [x] Add root commands for backend test/lint and frontend test/lint.
+- [x] Make all checks runnable with one documented command.
 
 ### Clean-start acceptance
 
-- [ ] Remove local containers and volumes using the documented reset command.
-- [ ] Run `docker compose up --build` from the clean state.
-- [ ] Confirm deterministic seed completion.
-- [ ] Complete the scenario using only the operator console.
-- [ ] Confirm exactly one incident and one ticket.
-- [ ] Confirm the suspected span is `P-001 → P-002`.
-- [ ] Confirm the affected pole count is three.
-- [ ] Confirm repair cannot be verified while poles remain dark.
-- [ ] Confirm repair telemetry automatically produces `VERIFIED` and `CLOSED`.
-- [ ] Replay a loss event and confirm no duplicate incident or ticket.
-- [ ] Record actual fault-to-visible-ticket and restoration-to-close timing.
+- [x] Remove local containers and volumes using the documented reset command.
+- [x] Run `docker compose up --build` from the clean state.
+- [x] Confirm deterministic seed completion.
+- [x] Complete the scenario using only the operator console.
+- [x] Confirm exactly one incident and one ticket.
+- [x] Confirm the suspected span is `P-001 → P-002`.
+- [x] Confirm the affected pole count is three.
+- [x] Confirm repair cannot be verified while poles remain dark.
+- [x] Confirm repair telemetry automatically produces `VERIFIED` and `CLOSED`.
+- [x] Replay a loss event and confirm no duplicate incident or ticket.
+- [x] Record actual fault-to-visible-ticket and restoration-to-close timing.
+
+The recorded clean acceptance run is documented in [`ACCEPTANCE.md`](ACCEPTANCE.md).
 
 ## Backbone exit gate
 
 The vertical slice is complete only when every statement below is true:
 
-- [ ] A clean checkout starts with one Docker Compose command.
-- [ ] The frontend, API, worker, Redis, and PostgreSQL use their real integration paths.
-- [ ] No simulator endpoint writes derived pole, incident, or ticket state directly.
-- [ ] Redis is acknowledged only after the PostgreSQL transaction commits.
-- [ ] Duplicate delivery is idempotent at the state and incident levels.
-- [ ] The known surveyed fault is localized to the correct span.
-- [ ] Many downstream dark poles create one incident, not one alert per pole.
-- [ ] Ticket verification and closure require fresh restoration telemetry.
-- [ ] The complete scenario is operable from the UI.
-- [ ] The focused automated test suite passes.
+- [x] A clean checkout starts with one Docker Compose command.
+- [x] The frontend, API, worker, Redis, and PostgreSQL use their real integration paths.
+- [x] No simulator endpoint writes derived pole, incident, or ticket state directly.
+- [x] Redis is acknowledged only after the PostgreSQL transaction commits.
+- [x] Duplicate delivery is idempotent at the state and incident levels.
+- [x] The known surveyed fault is localized to the correct span.
+- [x] Many downstream dark poles create one incident, not one alert per pole.
+- [x] Ticket verification and closure require fresh restoration telemetry.
+- [x] The complete scenario is operable from the UI.
+- [x] The focused automated test suite passes.
 
 When this gate passes, update the progress dashboard at the top and resume the full backlog in [`tasks.md`](tasks.md).
 

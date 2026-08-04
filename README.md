@@ -106,6 +106,30 @@ docker compose up --build
 
 The first command permanently removes local development data.
 
+## Development checks
+
+All required tooling runs in Docker, so a host Python or browser installation is
+not required:
+
+```bash
+make backend-lint
+make backend-test
+make frontend-check
+make e2e
+```
+
+Run the complete backbone quality gate with:
+
+```bash
+make check
+```
+
+`make check` runs backend lint and tests, frontend lint/tests/build, and a
+fresh-volume Playwright acceptance in an isolated Compose project. The isolated
+stack uses temporary ports and volumes, so it does not replace a normally
+running local application. `make acceptance-clean` runs only that clean-start
+browser acceptance.
+
 ## Telemetry ingestion
 
 The seeded devices can submit telemetry through the public API or the same-origin
@@ -204,6 +228,7 @@ The final repository will contain:
 * `DECISIONS.md` — assumptions and technical decisions
 * `AI-WORKFLOW.md` — AI tools used and validation process
 * `docs/VERTICAL-SLICE.md` — the ordered backbone tracker to complete before the full backlog
+* `docs/ACCEPTANCE.md` — the recorded backbone acceptance evidence and timings
 * `AGENTS.md` — repository-wide coding standards and quality gates used by Codex
 
 ## Scope
@@ -229,10 +254,10 @@ Not included:
 
 ## Current status
 
-VS-01 through VS-06 are implemented: the Docker foundation, migrated minimum
-schema, deterministic surveyed-network seed, validated HTTP-to-Redis telemetry
-boundary, idempotent Redis-to-PostgreSQL state worker, and deterministic
-surveyed-tree span localization are available. Active-incident grouping,
-audited ticket workflow, and the minimum operator read APIs are also complete.
-Fault simulation/restoration, the operator console, public deployment, demo
-video, and measured performance results remain to be built.
+VS-01 through VS-09 are complete. The tested backbone includes deterministic
+startup, HTTP-to-Redis telemetry, idempotent Redis-to-PostgreSQL processing,
+surveyed-span localization, one-incident grouping, audited ticket workflow,
+telemetry-verified restoration, the operator console, and an isolated
+fresh-volume Playwright acceptance. Work now resumes from the post-backbone
+ordering in `docs/tasks.md`; broader fault classes, inferred topology, load
+measurement, deployment, and demo packaging remain to be built.

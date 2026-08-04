@@ -123,6 +123,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: runtime
       args:
         VITE_OSM_TILE_URL: ${VITE_OSM_TILE_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}
     ports:
@@ -137,6 +138,28 @@ services:
       retries: 10
       start_period: 5s
     restart: unless-stopped
+
+  frontend-tests:
+    profiles: ["test"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: test
+    command: ["pnpm", "check"]
+    restart: "no"
+
+  frontend-e2e:
+    profiles: ["test"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: e2e
+    environment:
+      PLAYWRIGHT_BASE_URL: http://frontend:8080
+    depends_on:
+      frontend:
+        condition: service_healthy
+    restart: "no"
 
 volumes:
   postgres-data:

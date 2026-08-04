@@ -515,6 +515,82 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
 
 
 @pytest.mark.asyncio
+async def test_http_telemetry_reaches_one_persisted_incident(
+    analysis_harness: AnalysisHarness,
+) -> None:
+    base = datetime.now(UTC)
+    clock = MutableClock(base)
+    incidents = PostgresIncidentService(analysis_harness.engine, clock=clock)
+    ingestion = TelemetryIngestionService(
+        PostgresPoleBindingResolver(analysis_harness.engine),
+        RedisTelemetryPublisher(analysis_harness.redis, analysis_harness.stream),
+        clock=clock,
+    )
+    app = create_app(
+        settings=get_settings(),
+        telemetry_service=ingestion,
+        incident_service=incidents,
+    )
+    consumer = analysis_harness.consumer()
+    await consumer.ensure_group()
+
+    events = (
+        ("P-001", TelemetryEventType.HEARTBEAT, True),
+        ("P-002", TelemetryEventType.POWER_LOST, False),
+        ("P-003", TelemetryEventType.POWER_LOST, False),
+        ("P-004", TelemetryEventType.POWER_LOST, False),
+    )
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            responses = []
+            for index, (pole_id, event_type, energized) in enumerate(events):
+                response = await client.post(
+                    "/api/telemetry",
+                    json={
+                        "device_id": f"DEV-{pole_id}",
+                        "pole_id": pole_id,
+                        "event": event_type.value,
+                        "energized": energized,
+                        "ts": (base + timedelta(milliseconds=index)).isoformat(),
+                        "seq": 101,
+                        "battery_mv": 3480,
+                        "rssi": -91,
+                        "fw": "1.4.2",
+                    },
+                )
+                assert response.status_code == 202, response.json()
+                responses.append(response.json())
+
+    analysis_harness.event_ids.update(UUID(item["event_id"]) for item in responses)
+    assert await analysis_harness.redis.xlen(analysis_harness.stream) == 4
+    assert await consumer.consume_new_once() == 4
+
+    clock.value = base + timedelta(seconds=11)
+    scheduler = RedisAnalysisScheduler(
+        analysis_harness.redis,
+        PostgresDtSnapshotRepository(analysis_harness.engine),
+        due_set_name=analysis_harness.due_set,
+        live_freshness_seconds=1_920,
+        retry_delay_seconds=5,
+        candidate_sink=incidents,
+        clock=clock,
+    )
+    candidates = await scheduler.run_due_once()
+
+    assert len(candidates) == 1
+    assert candidates[0].suspected_asset_id == "P-001->P-002"
+    assert candidates[0].affected_pole_ids == ("P-002", "P-003", "P-004")
+    persisted = next(
+        item
+        for item in await incidents.list_incidents()
+        if item.fingerprint == "span:DT-001:P-001->P-002"
+    )
+    analysis_harness.incident_ids.add(persisted.incident_id)
+    assert persisted.ticket_id is not None
+    assert persisted.affected_pole_count == 3
+
+
+@pytest.mark.asyncio
 async def test_failed_analysis_is_rescheduled_without_losing_the_dt(
     analysis_harness: AnalysisHarness,
 ) -> None:
