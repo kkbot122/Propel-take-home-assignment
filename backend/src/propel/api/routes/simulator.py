@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 
 from propel.api.routes.telemetry import error_response
 from propel.api.schemas.simulator import (
-    InjectFixedSpanFaultRequest,
+    InjectFixedFaultRequest,
     SimulatedFaultResponse,
     SimulatorResetResponse,
 )
@@ -48,11 +48,12 @@ def simulator_unavailable(code: str, message: str) -> JSONResponse:
     responses=ERROR_RESPONSES,
 )
 async def inject_fault(
-    payload: InjectFixedSpanFaultRequest,
+    payload: InjectFixedFaultRequest,
     request: Request,
 ) -> SimulatedFaultResponse | JSONResponse:
     try:
-        fault = await simulator_service(request).inject_fixed_span_fault(
+        fault = await simulator_service(request).inject_fixed_fault(
+            fault_type=payload.fault_type,
             dt_id=payload.dt_id,
             parent_pole_id=payload.parent_pole_id,
             child_pole_id=payload.child_pole_id,

@@ -58,6 +58,11 @@ async def run_worker() -> None:
             due_set_name=settings.analysis_due_set_name,
             live_freshness_seconds=settings.analysis_live_freshness_seconds,
             retry_delay_seconds=settings.analysis_retry_delay_seconds,
+            dt_fault_ratio=settings.analysis_dt_fault_ratio,
+            dt_min_branches=settings.analysis_dt_min_branches,
+            feeder_fault_ratio=settings.analysis_feeder_fault_ratio,
+            feeder_min_dts=settings.analysis_feeder_min_dts,
+            correlation_window_seconds=settings.analysis_correlation_window_seconds,
             schedule_early_grace_seconds=settings.scheduled_outage_early_grace_seconds,
             schedule_overrun_grace_seconds=settings.scheduled_outage_overrun_grace_seconds,
             candidate_sink=incident_service,
@@ -89,6 +94,7 @@ async def run_worker() -> None:
                             "event": "worker_dependency_error",
                             "dependency": "redis",
                             "error_type": type(error).__name__,
+                            "error": str(error)[:500],
                         }
                     )
                 )

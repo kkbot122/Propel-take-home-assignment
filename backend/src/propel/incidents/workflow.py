@@ -1,5 +1,5 @@
 from propel.analysis.models import FaultCandidate
-from propel.domain.enums import FaultClass, TicketStatus
+from propel.domain.enums import FaultClass, SuspectedAssetType, TicketStatus
 
 OPERATOR_TRANSITIONS = {
     TicketStatus.DETECTED: TicketStatus.ACKNOWLEDGED,
@@ -29,6 +29,12 @@ class AutomaticTransitionOnlyError(Exception):
 def incident_fingerprint(candidate: FaultCandidate) -> str:
     if candidate.classification == FaultClass.SPAN_FAULT:
         return f"span:{candidate.dt_id}:{candidate.parent_pole_id}->{candidate.child_pole_id}"
+    if candidate.classification == FaultClass.DT_FAULT:
+        return f"dt:{candidate.dt_id}"
+    if candidate.classification == FaultClass.FEEDER_FAULT:
+        return f"feeder:{candidate.feeder_id}"
+    if candidate.classification == FaultClass.UNCONFIRMED_OUTAGE:
+        return f"unconfirmed:feeder:{candidate.feeder_id}"
     if candidate.classification == FaultClass.SENSOR_ANOMALY:
         if candidate.suppression is None:
             raise UnsupportedIncidentCandidateError(candidate.classification.value)
@@ -36,10 +42,11 @@ def incident_fingerprint(candidate: FaultCandidate) -> str:
     if candidate.classification == FaultClass.SCHEDULED_OUTAGE:
         if candidate.suppression is None or candidate.suppression.external_id is None:
             raise UnsupportedIncidentCandidateError(candidate.classification.value)
-        return (
-            f"scheduled:{candidate.suppression.external_id}:{candidate.dt_id}:"
-            f"{candidate.parent_pole_id}->{candidate.child_pole_id}"
-        )
+        if candidate.suspected_asset_type == SuspectedAssetType.SPAN:
+            asset_scope = f"{candidate.dt_id}:{candidate.parent_pole_id}->{candidate.child_pole_id}"
+        else:
+            asset_scope = candidate.suspected_asset_id
+        return f"scheduled:{candidate.suppression.external_id}:{asset_scope}"
     raise UnsupportedIncidentCandidateError(candidate.classification.value)
 
 

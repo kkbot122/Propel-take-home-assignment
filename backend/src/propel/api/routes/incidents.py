@@ -9,6 +9,7 @@ from propel.api.schemas.incidents import (
     AcknowledgeTicketRequest,
     AssignTicketRequest,
     IncidentResponse,
+    NetworkOverviewResponse,
     NetworkPoleResponse,
     NetworkTopologyResponse,
     ResolveTicketRequest,
@@ -23,6 +24,7 @@ from propel.incidents.workflow import (
 from propel.infra.incidents import (
     IncidentNotFoundError,
     IncidentStoreUnavailableError,
+    NetworkFeederNotFoundError,
     NetworkTransformerNotFoundError,
     PostgresIncidentService,
     TicketNotFoundError,
@@ -233,6 +235,29 @@ async def reject_manual_closure(
 ) -> JSONResponse:
     del ticket_id, payload
     return automatic_transition_response(TicketStatus.CLOSED)
+
+
+@router.get(
+    "/network/overview/{feeder_id}",
+    response_model=NetworkOverviewResponse,
+    responses=ERROR_RESPONSES,
+)
+async def get_network_overview(
+    feeder_id: str,
+    request: Request,
+) -> NetworkOverviewResponse | JSONResponse:
+    try:
+        overview = await incident_service(request).get_network_overview(feeder_id)
+    except NetworkFeederNotFoundError:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "FEEDER_NOT_FOUND",
+            f"feeder {feeder_id} does not exist",
+            retryable=False,
+        )
+    except IncidentStoreUnavailableError:
+        return unavailable_response()
+    return NetworkOverviewResponse.model_validate(overview)
 
 
 @router.get(

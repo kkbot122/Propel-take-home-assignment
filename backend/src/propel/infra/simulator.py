@@ -9,12 +9,13 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
-from propel.domain.enums import SimulatorFaultStatus, TelemetryEventType
+from propel.domain.enums import SimulatorFaultStatus, SimulatorFaultType, TelemetryEventType
 from propel.infra.database.models import (
     Device,
     DeviceBinding,
     DeviceHealth,
     DistributionTransformer,
+    Feeder,
     Pole,
     SimulatedFault,
     TopologyEdge,
@@ -124,7 +125,6 @@ class PostgresSimulatorService:
                     raise InvalidSimulatorSpanError
                 active_fault = await session.scalar(
                     select(SimulatedFault).where(
-                        SimulatedFault.dt_id == transformer_id,
                         SimulatedFault.status == SimulatorFaultStatus.ACTIVE,
                     )
                 )
@@ -140,7 +140,9 @@ class PostgresSimulatorService:
                         child_pole_id,
                     )
                     fault = SimulatedFault(
+                        fault_type=SimulatorFaultType.SPAN_FAULT,
                         dt_id=transformer_id,
+                        feeder_id=None,
                         parent_pole_id=parent_id,
                         child_pole_id=child_id,
                         status=SimulatorFaultStatus.ACTIVE,
@@ -169,6 +171,86 @@ class PostgresSimulatorService:
                 commands = await self._injection_commands(
                     session,
                     parent_pole_id,
+                    tuple(fault.deenergized_pole_ids),
+                    fault.injected_at,
+                )
+                receipts = await self._emit_all(commands)
+                fault.injection_telemetry_at = max(receipt.received_at for receipt in receipts)
+                view = await self._fault_view(session, fault, receipts)
+        except SQLAlchemyError as error:
+            raise SimulatorStoreUnavailableError from error
+        return view
+
+    async def _inject_fixed_scope_fault(
+        self,
+        fault_type: SimulatorFaultType,
+    ) -> SimulatedFaultView:
+        if fault_type not in (SimulatorFaultType.DT_FAULT, SimulatorFaultType.FEEDER_FAULT):
+            raise InvalidSimulatorSpanError
+        injected_at = self._clock()
+        try:
+            async with self._session_factory.begin() as session:
+                active_fault = await session.scalar(
+                    select(SimulatedFault).where(
+                        SimulatedFault.status == SimulatorFaultStatus.ACTIVE
+                    )
+                )
+                if active_fault is not None:
+                    raise ActiveSimulatorFaultError
+                feeder_internal_id = await session.scalar(
+                    select(Feeder.id).where(Feeder.feeder_id == "FDR-001")
+                )
+                transformer_internal_id = await session.scalar(
+                    select(DistributionTransformer.id).where(
+                        DistributionTransformer.dt_id == "DT-001"
+                    )
+                )
+                if feeder_internal_id is None or transformer_internal_id is None:
+                    raise InvalidSimulatorSpanError
+                pole_statement = select(Pole.pole_id)
+                if fault_type == SimulatorFaultType.DT_FAULT:
+                    pole_statement = pole_statement.where(Pole.dt_id == transformer_internal_id)
+                else:
+                    pole_statement = pole_statement.where(Pole.feeder_id == feeder_internal_id)
+                affected_ids = tuple(await session.scalars(pole_statement.order_by(Pole.pole_id)))
+                fault = SimulatedFault(
+                    fault_type=fault_type,
+                    feeder_id=(
+                        feeder_internal_id
+                        if fault_type == SimulatorFaultType.FEEDER_FAULT
+                        else None
+                    ),
+                    dt_id=(
+                        transformer_internal_id
+                        if fault_type == SimulatorFaultType.DT_FAULT
+                        else None
+                    ),
+                    parent_pole_id=None,
+                    child_pole_id=None,
+                    status=SimulatorFaultStatus.ACTIVE,
+                    deenergized_pole_ids=list(affected_ids),
+                    injected_at=injected_at,
+                )
+                session.add(fault)
+                await session.flush()
+                fault_id = fault.fault_id
+        except IntegrityError as error:
+            raise ActiveSimulatorFaultError from error
+        except SQLAlchemyError as error:
+            raise SimulatorStoreUnavailableError from error
+
+        try:
+            async with self._session_factory.begin() as session:
+                fault = await session.scalar(
+                    select(SimulatedFault)
+                    .where(SimulatedFault.fault_id == fault_id)
+                    .with_for_update()
+                )
+                if fault is None:
+                    raise SimulatorFaultNotFoundError
+                commands = await self._injection_commands(
+                    session,
+                    None,
                     tuple(fault.deenergized_pole_ids),
                     fault.injected_at,
                 )
@@ -315,11 +397,11 @@ class PostgresSimulatorService:
     async def _injection_commands(
         self,
         session: AsyncSession,
-        parent_pole_id: str,
+        parent_pole_id: str | None,
         affected_ids: tuple[str, ...],
         occurred_at: datetime,
     ) -> tuple[TelemetryCommand, ...]:
-        pole_ids = (parent_pole_id, *affected_ids)
+        pole_ids = ((parent_pole_id,) if parent_pole_id is not None else ()) + affected_ids
         rows = await self._device_rows(session, pole_ids)
         commands: list[TelemetryCommand] = []
         for pole_id in pole_ids:
@@ -390,21 +472,30 @@ class PostgresSimulatorService:
     ) -> SimulatedFaultView:
         parent = aliased(Pole)
         child = aliased(Pole)
+        transformer = aliased(DistributionTransformer)
         row = (
             await session.execute(
                 select(
-                    DistributionTransformer.dt_id,
+                    Feeder.feeder_id,
+                    transformer.dt_id,
                     parent.pole_id.label("parent_pole_id"),
                     child.pole_id.label("child_pole_id"),
                 )
-                .select_from(DistributionTransformer)
-                .join(parent, parent.id == fault.parent_pole_id)
-                .join(child, child.id == fault.child_pole_id)
-                .where(DistributionTransformer.id == fault.dt_id)
+                .select_from(SimulatedFault)
+                .outerjoin(transformer, transformer.id == SimulatedFault.dt_id)
+                .outerjoin(
+                    Feeder,
+                    Feeder.id == func.coalesce(SimulatedFault.feeder_id, transformer.feeder_id),
+                )
+                .outerjoin(parent, parent.id == SimulatedFault.parent_pole_id)
+                .outerjoin(child, child.id == SimulatedFault.child_pole_id)
+                .where(SimulatedFault.fault_id == fault.fault_id)
             )
         ).one()
         return SimulatedFaultView(
             fault_id=fault.fault_id,
+            fault_type=fault.fault_type,
+            feeder_id=row.feeder_id,
             dt_id=row.dt_id,
             parent_pole_id=row.parent_pole_id,
             child_pole_id=row.child_pole_id,
@@ -415,3 +506,19 @@ class PostgresSimulatorService:
             repaired_at=fault.repaired_at,
             emitted_event_ids=tuple(receipt.event_id for receipt in receipts),
         )
+
+    async def inject_fixed_fault(
+        self,
+        *,
+        fault_type: SimulatorFaultType,
+        dt_id: str,
+        parent_pole_id: str,
+        child_pole_id: str,
+    ) -> SimulatedFaultView:
+        if fault_type == SimulatorFaultType.SPAN_FAULT:
+            return await self.inject_fixed_span_fault(
+                dt_id=dt_id,
+                parent_pole_id=parent_pole_id,
+                child_pole_id=child_pole_id,
+            )
+        return await self._inject_fixed_scope_fault(fault_type)

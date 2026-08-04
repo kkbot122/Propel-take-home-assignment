@@ -124,3 +124,32 @@ class NetworkTopologyResponse(BaseModel):
     dt_id: str
     topology_version: int
     spans: list[NetworkSpanResponse]
+
+
+class NetworkSubstationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    substation_id: str
+    name: str
+    latitude: Annotated[float, Field(ge=-90, le=90)]
+    longitude: Annotated[float, Field(ge=-180, le=180)]
+    pin_code: str
+
+
+class NetworkTransformerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    dt_id: str
+    name: str
+    latitude: Annotated[float, Field(ge=-90, le=90)]
+    longitude: Annotated[float, Field(ge=-180, le=180)]
+    pin_code: str
+
+
+class NetworkOverviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    feeder_id: str
+    name: str
+    substation: NetworkSubstationResponse
+    transformers: list[NetworkTransformerResponse]

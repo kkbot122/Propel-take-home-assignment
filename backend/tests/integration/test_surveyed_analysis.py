@@ -23,6 +23,7 @@ from propel.domain.enums import (
     PoleStatus,
     ScheduledOutageScope,
     SimulatorFaultStatus,
+    SimulatorFaultType,
     TelemetryEventType,
     TelemetryOrigin,
     TopologySource,
@@ -190,20 +191,29 @@ async def analysis_harness() -> AsyncIterator[AnalysisHarness]:
         pole_rows = (
             await session.execute(
                 select(Pole.pole_id, Pole.id).where(
-                    Pole.pole_id.in_(("P-001", "P-002", "P-003", "P-004"))
+                    Pole.pole_id.in_(("P-001", "P-002", "P-003", "P-004", "P-101", "P-102"))
                 )
             )
         ).all()
         device_rows = (
             await session.execute(
                 select(Device.device_id, Device.id).where(
-                    Device.device_id.in_(("DEV-P-001", "DEV-P-002", "DEV-P-003", "DEV-P-004"))
+                    Device.device_id.in_(
+                        (
+                            "DEV-P-001",
+                            "DEV-P-002",
+                            "DEV-P-003",
+                            "DEV-P-004",
+                            "DEV-P-101",
+                            "DEV-P-102",
+                        )
+                    )
                 )
             )
         ).all()
         pole_ids = dict(pole_rows)
         device_ids = dict(device_rows)
-        assert len(pole_ids) == 4 and len(device_ids) == 4
+        assert len(pole_ids) == 6 and len(device_ids) == 6
 
         pole_snapshots = {
             row.pole_id: dict(row._mapping)
@@ -446,6 +456,7 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
         incident_list_response = await client.get("/api/incidents")
         incident_response = await client.get(f"/api/incidents/{incident.incident_id}")
         ticket_response = await client.get(f"/api/tickets/{incident.ticket_id}")
+        overview_response = await client.get("/api/network/overview/FDR-001")
         poles_response = await client.get("/api/network/poles", params={"dt_id": "DT-001"})
         topology_response = await client.get("/api/network/topology/DT-001")
         skipped_response = await client.post(
@@ -482,6 +493,13 @@ async def test_debounced_worker_snapshot_localizes_fixed_surveyed_fault(
     assert incident_response.json()["affected_pole_ids"] == ["P-002", "P-003", "P-004"]
     assert ticket_response.status_code == 200
     assert ticket_response.json()["status"] == "DETECTED"
+    assert overview_response.status_code == 200
+    assert overview_response.json()["feeder_id"] == "FDR-001"
+    assert overview_response.json()["substation"]["substation_id"] == "SUB-001"
+    assert [item["dt_id"] for item in overview_response.json()["transformers"]] == [
+        "DT-001",
+        "DT-002",
+    ]
     assert poles_response.status_code == 200
     assert [pole["pole_id"] for pole in poles_response.json()] == [
         "P-001",
@@ -755,6 +773,99 @@ async def test_failed_analysis_is_rescheduled_without_losing_the_dt(
     assert await analysis_harness.redis.zscore(analysis_harness.due_set, "DT-001") == pytest.approx(
         (now + timedelta(seconds=5)).timestamp()
     )
+
+
+@pytest.mark.parametrize(
+    ("fault_type", "expected_classification", "expected_fingerprint", "event_count"),
+    [
+        (
+            SimulatorFaultType.DT_FAULT,
+            FaultClass.DT_FAULT,
+            "dt:DT-001",
+            4,
+        ),
+        (
+            SimulatorFaultType.FEEDER_FAULT,
+            FaultClass.FEEDER_FAULT,
+            "feeder:FDR-001",
+            6,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_scope_faults_classify_through_public_simulator_telemetry(
+    analysis_harness: AnalysisHarness,
+    fault_type: SimulatorFaultType,
+    expected_classification: FaultClass,
+    expected_fingerprint: str,
+    event_count: int,
+) -> None:
+    base = datetime.now(UTC)
+    clock = MutableClock(base)
+    ingestion = TelemetryIngestionService(
+        PostgresPoleBindingResolver(analysis_harness.engine),
+        RedisTelemetryPublisher(analysis_harness.redis, analysis_harness.stream),
+        clock=clock,
+    )
+    gateway = AsgiSimulatorTelemetryGateway()
+    simulator = PostgresSimulatorService(analysis_harness.engine, gateway, clock=clock)
+    incidents = PostgresIncidentService(analysis_harness.engine, clock=clock)
+    app = create_app(
+        settings=get_settings(),
+        telemetry_service=ingestion,
+        incident_service=incidents,
+        simulator_service=simulator,
+    )
+    gateway.app = app
+    consumer = analysis_harness.consumer()
+    await consumer.ensure_group()
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/simulator/faults",
+                json={"fault_type": fault_type.value},
+            )
+
+    assert response.status_code == 201, response.json()
+    injected = response.json()
+    fault_id = UUID(injected["fault_id"])
+    analysis_harness.simulated_fault_ids.add(fault_id)
+    analysis_harness.event_ids.update(UUID(item) for item in injected["emitted_event_ids"])
+    assert injected["fault_type"] == fault_type.value
+    assert len(injected["emitted_event_ids"]) == event_count
+    assert await consumer.consume_new_once() == event_count
+
+    clock.value = base + timedelta(seconds=11)
+    scheduler = RedisAnalysisScheduler(
+        analysis_harness.redis,
+        PostgresDtSnapshotRepository(analysis_harness.engine),
+        due_set_name=analysis_harness.due_set,
+        live_freshness_seconds=1_920,
+        retry_delay_seconds=5,
+        candidate_sink=incidents,
+        clock=clock,
+    )
+    candidates = await scheduler.run_due_once()
+
+    assert len(candidates) == 1
+    assert candidates[0].classification == expected_classification
+    persisted = next(
+        item
+        for item in await incidents.list_incidents()
+        if item.fingerprint == expected_fingerprint
+    )
+    analysis_harness.incident_ids.add(persisted.incident_id)
+    assert persisted.classification == expected_classification
+    assert persisted.ticket_id is not None
+    if fault_type == SimulatorFaultType.FEEDER_FAULT:
+        assert persisted.affected_pole_count == 6
+        repeated = await scheduler.run_due_once()
+        assert len(repeated) == 1
+        assert repeated[0].classification == FaultClass.FEEDER_FAULT
+        assert (await incidents.get_incident(persisted.incident_id)).incident_id == (
+            persisted.incident_id
+        )
 
 
 @pytest.mark.asyncio

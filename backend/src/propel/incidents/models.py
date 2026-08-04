@@ -100,3 +100,29 @@ class NetworkTopologyView:
     dt_id: str
     topology_version: int
     spans: tuple[NetworkSpanView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkSubstationView:
+    substation_id: str
+    name: str
+    latitude: float
+    longitude: float
+    pin_code: str
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkTransformerView:
+    dt_id: str
+    name: str
+    latitude: float
+    longitude: float
+    pin_code: str
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkOverviewView:
+    feeder_id: str
+    name: str
+    substation: NetworkSubstationView
+    transformers: tuple[NetworkTransformerView, ...]

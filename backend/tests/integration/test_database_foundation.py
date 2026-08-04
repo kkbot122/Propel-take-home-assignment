@@ -71,11 +71,12 @@ async def test_schema_and_seed_are_complete_and_idempotent(database_engine: Asyn
     first_summary = await seed_database(database_engine)
     second_summary = await seed_database(database_engine)
     assert first_summary == second_summary
-    assert second_summary.poles == 4
-    assert second_summary.devices == 4
-    assert second_summary.bindings == 4
-    assert second_summary.topology_edges == 4
-    assert second_summary.live_pole_states == 4
+    assert second_summary.transformers == 2
+    assert second_summary.poles == 6
+    assert second_summary.devices == 6
+    assert second_summary.bindings == 6
+    assert second_summary.topology_edges == 6
+    assert second_summary.live_pole_states == 6
     assert second_summary.scheduled_outages == 1
 
     async with database_engine.connect() as connection:
@@ -122,7 +123,11 @@ async def test_schema_and_seed_are_complete_and_idempotent(database_engine: Asyn
             await connection.execute(
                 select(Pole.id, Pole.pole_id)
                 .join(PoleState)
-                .where(PoleState.state == PoleStatus.LIVE)
+                .join(DistributionTransformer, Pole.dt_id == DistributionTransformer.id)
+                .where(
+                    PoleState.state == PoleStatus.LIVE,
+                    DistributionTransformer.dt_id == "DT-001",
+                )
             )
         ).all()
         pole_names_by_id = {row.id: row.pole_id for row in pole_rows}

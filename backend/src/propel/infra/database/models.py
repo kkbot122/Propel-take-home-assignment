@@ -37,6 +37,7 @@ from propel.domain.enums import (
     ProcessingOutcome,
     ScheduledOutageScope,
     SimulatorFaultStatus,
+    SimulatorFaultType,
     SuspectedAssetType,
     TelemetryEventType,
     TelemetryOrigin,
@@ -532,25 +533,34 @@ class SimulatedFault(Base):
     __tablename__ = "simulated_faults"
     __table_args__ = (
         Index(
-            "uq_simulated_faults_active_dt",
-            "dt_id",
+            "uq_simulated_faults_single_active",
+            "status",
             unique=True,
             postgresql_where=text("status = 'ACTIVE'"),
+        ),
+        CheckConstraint(
+            "(fault_type = 'SPAN_FAULT' AND dt_id IS NOT NULL AND feeder_id IS NULL "
+            "AND parent_pole_id IS NOT NULL AND child_pole_id IS NOT NULL) OR "
+            "(fault_type = 'DT_FAULT' AND dt_id IS NOT NULL AND feeder_id IS NULL "
+            "AND parent_pole_id IS NULL AND child_pole_id IS NULL) OR "
+            "(fault_type = 'FEEDER_FAULT' AND dt_id IS NULL AND feeder_id IS NOT NULL "
+            "AND parent_pole_id IS NULL AND child_pole_id IS NULL)",
+            name="valid_scope",
         ),
     )
 
     fault_id: Mapped[UUID] = mapped_column(
         primary_key=True, default=uuid4, server_default=text("gen_random_uuid()")
     )
-    dt_id: Mapped[int] = mapped_column(
-        ForeignKey("distribution_transformers.id", ondelete="RESTRICT"), nullable=False
+    fault_type: Mapped[SimulatorFaultType] = mapped_column(
+        text_enum(SimulatorFaultType, "simulator_fault_type"), nullable=False
     )
-    parent_pole_id: Mapped[int] = mapped_column(
-        ForeignKey("poles.id", ondelete="RESTRICT"), nullable=False
+    feeder_id: Mapped[int | None] = mapped_column(ForeignKey("feeders.id", ondelete="RESTRICT"))
+    dt_id: Mapped[int | None] = mapped_column(
+        ForeignKey("distribution_transformers.id", ondelete="RESTRICT")
     )
-    child_pole_id: Mapped[int] = mapped_column(
-        ForeignKey("poles.id", ondelete="RESTRICT"), nullable=False
-    )
+    parent_pole_id: Mapped[int] = mapped_column(ForeignKey("poles.id", ondelete="RESTRICT"))
+    child_pole_id: Mapped[int] = mapped_column(ForeignKey("poles.id", ondelete="RESTRICT"))
     status: Mapped[SimulatorFaultStatus] = mapped_column(
         text_enum(SimulatorFaultStatus, "simulator_fault_status"), nullable=False
     )

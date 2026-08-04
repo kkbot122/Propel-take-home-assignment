@@ -23,7 +23,6 @@ from propel.domain.enums import (
 from propel.incidents.workflow import (
     AutomaticTransitionOnlyError,
     InvalidTicketTransitionError,
-    UnsupportedIncidentCandidateError,
     incident_fingerprint,
     require_operator_transition,
 )
@@ -146,8 +145,17 @@ def test_verification_and_closure_are_automatic_only(requested: TicketStatus) ->
         require_operator_transition(TicketStatus.RESOLVED, requested)
 
 
-def test_non_span_candidate_is_not_given_a_span_fingerprint() -> None:
+def test_scope_candidate_fingerprints_are_stable_domain_keys() -> None:
     candidate = span_candidate()
 
-    with pytest.raises(UnsupportedIncidentCandidateError):
-        incident_fingerprint(replace(candidate, classification=FaultClass.DT_FAULT))
+    dt_candidate = replace(candidate, classification=FaultClass.DT_FAULT)
+    feeder_candidate = replace(
+        candidate,
+        classification=FaultClass.FEEDER_FAULT,
+        affected_dt_ids=("DT-001", "DT-002"),
+    )
+    unconfirmed = replace(feeder_candidate, classification=FaultClass.UNCONFIRMED_OUTAGE)
+
+    assert incident_fingerprint(dt_candidate) == "dt:DT-001"
+    assert incident_fingerprint(feeder_candidate) == "feeder:FDR-001"
+    assert incident_fingerprint(unconfirmed) == "unconfirmed:feeder:FDR-001"

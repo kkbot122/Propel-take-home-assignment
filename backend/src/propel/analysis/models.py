@@ -43,6 +43,17 @@ class TopologySpan:
 
 
 @dataclass(frozen=True, slots=True)
+class FeederTransformerEvidence:
+    dt_id: str
+    latitude: float
+    longitude: float
+    pin_code: str | None
+    topology_version: int
+    poles: tuple[PoleEvidence, ...]
+    spans: tuple[TopologySpan, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ScheduledOutageWindow:
     outage_id: str
     scope: ScheduledOutageScope
@@ -83,7 +94,11 @@ class NetworkSnapshot:
     analysis_at: datetime
     poles: tuple[PoleEvidence, ...]
     spans: tuple[TopologySpan, ...]
+    dt_latitude: float = 0.0
+    dt_longitude: float = 0.0
+    dt_pin_code: str | None = None
     scheduled_outages: tuple[ScheduledOutageWindow, ...] = ()
+    feeder_transformers: tuple[FeederTransformerEvidence, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,13 +152,15 @@ class CandidateEvidence:
 @dataclass(frozen=True, slots=True)
 class FaultCandidate:
     dt_id: str
+    feeder_id: str
+    affected_dt_ids: tuple[str, ...]
     topology_version: int
     analysis_at: datetime
     classification: FaultClass
     suspected_asset_type: SuspectedAssetType
     suspected_asset_id: str
-    parent_pole_id: str
-    child_pole_id: str
+    parent_pole_id: str | None
+    child_pole_id: str | None
     affected_pole_ids: tuple[str, ...]
     precision: LocalizationPrecision
     topology_source: TopologySource

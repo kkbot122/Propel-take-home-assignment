@@ -6,15 +6,25 @@ import { App } from './App'
 import type {
   HealthResponse,
   Incident,
+  NetworkOverview,
   NetworkPole,
   NetworkTopology,
   Ticket,
 } from './api/types'
 
 vi.mock('./components/NetworkMap', () => ({
-  NetworkMap: ({ selectedIncident }: { selectedIncident: Incident | null }) => (
+  NetworkMap: ({
+    overview,
+    selectedIncident,
+  }: {
+    overview: NetworkOverview | null
+    selectedIncident: Incident | null
+  }) => (
     <div data-testid="network-map">
       Map focus: {selectedIncident?.suspected_asset_id ?? 'network'}
+      <span>
+        Assets: {overview?.feeder_id ?? 'none'} · {overview?.transformers.length ?? 0} DTs
+      </span>
     </div>
   ),
 }))
@@ -122,6 +132,34 @@ const topology: NetworkTopology = {
   spans: [{ parent_pole_id: null, child_pole_id: 'P-001', source: 'SURVEYED', edge_confidence: 1 }],
 }
 
+const networkOverview: NetworkOverview = {
+  feeder_id: 'FDR-001',
+  name: 'Demo Feeder',
+  substation: {
+    substation_id: 'SUB-001',
+    name: 'Demo Substation',
+    latitude: 12.889,
+    longitude: 77.5839,
+    pin_code: '560078',
+  },
+  transformers: [
+    {
+      dt_id: 'DT-001',
+      name: 'Demo DT 1',
+      latitude: 12.8891,
+      longitude: 77.584,
+      pin_code: '560078',
+    },
+    {
+      dt_id: 'DT-002',
+      name: 'Demo DT 2',
+      latitude: 12.89005,
+      longitude: 77.585,
+      pin_code: '560078',
+    },
+  ],
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -166,7 +204,31 @@ function installFetchRouter(options?: {
       })
     }
     if (url.startsWith('/api/network/poles')) return jsonResponse(poles)
+    if (url === '/api/network/overview/FDR-001') return jsonResponse(networkOverview)
     if (url === '/api/network/topology/DT-001') return jsonResponse(topology)
+    if (url === '/api/network/topology/DT-002') {
+      return jsonResponse({ ...topology, dt_id: 'DT-002', spans: [] })
+    }
+    if (url === '/api/simulator/faults') {
+      const payload = JSON.parse(String(init?.body)) as { fault_type: string }
+      return jsonResponse(
+        {
+          fault_id: 'fault-1',
+          fault_type: payload.fault_type,
+          feeder_id: 'FDR-001',
+          dt_id: payload.fault_type === 'FEEDER_FAULT' ? null : 'DT-001',
+          parent_pole_id: null,
+          child_pole_id: null,
+          status: 'ACTIVE',
+          deenergized_pole_ids: ['P-001'],
+          injected_at: '2026-08-04T01:00:00Z',
+          injection_telemetry_at: '2026-08-04T01:00:00Z',
+          repaired_at: null,
+          emitted_event_ids: ['event-1'],
+        },
+        201,
+      )
+    }
     throw new Error(`Unhandled request: ${url}`)
   })
   vi.stubGlobal('fetch', request)
@@ -208,6 +270,7 @@ describe('App', () => {
       screen.getByText('surveyed topology supports exact-span precision'),
     ).toBeInTheDocument()
     expect(screen.getByTestId('network-map')).toHaveTextContent('P-001->P-002')
+    expect(screen.getByTestId('network-map')).toHaveTextContent('FDR-001 · 2 DTs')
     expect(await screen.findByRole('button', { name: 'Acknowledge incident' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: 'Assign crew' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Claim physical repair' })).not.toBeInTheDocument()
@@ -246,7 +309,9 @@ describe('App', () => {
 
     expect(await screen.findByRole('heading', { name: 'No active outages' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'No incident selected' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Inject fixed fault' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Inject span fault' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Inject DT fault' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Inject feeder fault' })).toBeEnabled()
     expect(screen.getByText(/Last refresh/)).toBeInTheDocument()
   })
 
@@ -260,7 +325,23 @@ describe('App', () => {
     expect(screen.getByText('No dispatch ticket created')).toBeInTheDocument()
     expect(screen.getByText(/telemetry-consistency-rule/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Acknowledge incident' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Inject fixed fault' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Inject span fault' })).toBeEnabled()
+  })
+
+  it('sends the selected feeder-fault scenario through the simulator API', async () => {
+    const fetchMock = installFetchRouter({ incidents: [] })
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Inject feeder fault' }))
+
+    expect(await screen.findByText(/FEEDER FAULT injected/)).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/simulator/faults',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ fault_type: 'FEEDER_FAULT' }),
+      }),
+    )
   })
 
   it('presents backend health failure instead of claiming data is current', async () => {

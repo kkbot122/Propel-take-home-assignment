@@ -2,6 +2,7 @@ import type {
   ApiErrorBody,
   HealthResponse,
   Incident,
+  NetworkOverview,
   NetworkPole,
   NetworkTopology,
   SimulatedFault,
@@ -48,8 +49,20 @@ export const api = {
   incident: (incidentId: string) =>
     requestJson<Incident>(`/api/incidents/${incidentId}`),
   ticket: (ticketId: string) => requestJson<Ticket>(`/api/tickets/${ticketId}`),
-  poles: () => requestJson<NetworkPole[]>('/api/network/poles?dt_id=DT-001'),
-  topology: () => requestJson<NetworkTopology>('/api/network/topology/DT-001'),
+  poles: async () =>
+    (
+      await Promise.all([
+        requestJson<NetworkPole[]>('/api/network/poles?dt_id=DT-001'),
+        requestJson<NetworkPole[]>('/api/network/poles?dt_id=DT-002'),
+      ])
+    ).flat(),
+  topologies: () =>
+    Promise.all([
+      requestJson<NetworkTopology>('/api/network/topology/DT-001'),
+      requestJson<NetworkTopology>('/api/network/topology/DT-002'),
+    ]),
+  networkOverview: () =>
+    requestJson<NetworkOverview>('/api/network/overview/FDR-001'),
   acknowledge: (ticketId: string) =>
     requestJson<Ticket>(`/api/tickets/${ticketId}/acknowledge`, {
       method: 'POST',
@@ -72,10 +85,10 @@ export const api = {
         reason: 'Crew reports physical repair complete',
       }),
     }),
-  injectFault: () =>
+  injectFault: (faultType: SimulatedFault['fault_type']) =>
     requestJson<SimulatedFault>('/api/simulator/faults', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ fault_type: faultType }),
     }),
   repairFault: (faultId: string) =>
     requestJson<SimulatedFault>(`/api/simulator/faults/${faultId}/repair`, {

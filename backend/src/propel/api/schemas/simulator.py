@@ -4,13 +4,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from propel.domain.enums import SimulatorFaultStatus
+from propel.domain.enums import SimulatorFaultStatus, SimulatorFaultType
 
 
-class InjectFixedSpanFaultRequest(BaseModel):
+class InjectFixedFaultRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    fault_type: Literal["SPAN_FAULT"] = "SPAN_FAULT"
+    fault_type: SimulatorFaultType = SimulatorFaultType.SPAN_FAULT
     dt_id: Literal["DT-001"] = "DT-001"
     parent_pole_id: Literal["P-001"] = "P-001"
     child_pole_id: Literal["P-002"] = "P-002"
@@ -20,9 +20,11 @@ class SimulatedFaultResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     fault_id: UUID
-    dt_id: str
-    parent_pole_id: str
-    child_pole_id: str
+    fault_type: SimulatorFaultType
+    feeder_id: str | None
+    dt_id: str | None
+    parent_pole_id: str | None
+    child_pole_id: str | None
     status: SimulatorFaultStatus
     deenergized_pole_ids: list[str]
     injected_at: datetime

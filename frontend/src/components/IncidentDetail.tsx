@@ -135,7 +135,11 @@ export function IncidentDetail({
       <section className="evidence-section" aria-labelledby="evidence-title">
         <div className="subheading-row">
           <h3 id="evidence-title">
-            {suppressed ? 'Why Propel suppressed dispatch' : 'Why Propel chose this span'}
+            {suppressed
+              ? 'Why Propel suppressed dispatch'
+              : `Why Propel chose this ${incident.suspected_asset_type
+                  .replaceAll('_', ' ')
+                  .toLowerCase()}`}
           </h3>
           <span>{incident.affected_pole_ids.join(', ')}</span>
         </div>

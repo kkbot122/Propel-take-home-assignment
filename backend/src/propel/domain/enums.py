@@ -64,6 +64,12 @@ class SimulatorFaultStatus(StrEnum):
     REPAIRED = "REPAIRED"
 
 
+class SimulatorFaultType(StrEnum):
+    SPAN_FAULT = "SPAN_FAULT"
+    DT_FAULT = "DT_FAULT"
+    FEEDER_FAULT = "FEEDER_FAULT"
+
+
 class ProcessingOutcome(StrEnum):
     ACCEPTED = "accepted"
     DUPLICATE = "duplicate"

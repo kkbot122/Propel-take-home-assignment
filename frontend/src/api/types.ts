@@ -83,11 +83,36 @@ export interface NetworkTopology {
   spans: NetworkSpan[]
 }
 
+export interface NetworkSubstation {
+  substation_id: string
+  name: string
+  latitude: number
+  longitude: number
+  pin_code: string
+}
+
+export interface NetworkTransformer {
+  dt_id: string
+  name: string
+  latitude: number
+  longitude: number
+  pin_code: string
+}
+
+export interface NetworkOverview {
+  feeder_id: string
+  name: string
+  substation: NetworkSubstation
+  transformers: NetworkTransformer[]
+}
+
 export interface SimulatedFault {
   fault_id: string
-  dt_id: string
-  parent_pole_id: string
-  child_pole_id: string
+  fault_type: 'SPAN_FAULT' | 'DT_FAULT' | 'FEEDER_FAULT'
+  feeder_id: string | null
+  dt_id: string | null
+  parent_pole_id: string | null
+  child_pole_id: string | null
   status: 'ACTIVE' | 'REPAIRED'
   deenergized_pole_ids: string[]
   injected_at: string

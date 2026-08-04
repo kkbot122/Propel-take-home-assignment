@@ -11,15 +11,19 @@ test('operator completes the surveyed-span backbone workflow', async ({ page, re
   await expect(page.getByText('System online', { exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No active outages' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'OpenStreetMap' })).toBeVisible()
+  await expect(page.getByText('FDR-001 source', { exact: true })).toBeVisible()
+  await expect(page.getByText('DT-001', { exact: true })).toBeVisible()
+  await expect(page.getByText('DT-002', { exact: true })).toBeVisible()
 
   const faultStartedAt = Date.now()
-  await page.getByRole('button', { name: 'Inject fixed fault' }).click()
+  await page.getByRole('button', { name: 'Inject span fault' }).click()
   await expect(
-    page.getByText('Fault injected. Waiting for telemetry correlation and localization.'),
+    page.getByText('SPAN FAULT injected. Waiting for telemetry correlation and localization.'),
   ).toBeVisible()
 
   const detail = page.getByRole('region', { name: 'P-001 → P-002' })
   await expect(detail).toBeVisible({ timeout: 45_000 })
+  await expect(page.getByText('SPAN FAULT focus', { exact: true })).toBeVisible()
   const faultToVisibleMs = Date.now() - faultStartedAt
 
   const activeResponse = await request.get('/api/incidents?status=ACTIVE&limit=100')

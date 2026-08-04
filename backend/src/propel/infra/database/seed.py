@@ -79,37 +79,50 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
         "FDR-001",
     )
 
-    await session.execute(
-        insert(DistributionTransformer)
-        .values(
-            dt_id="DT-001",
-            feeder_id=feeder_id,
-            name="JP Nagar DT 1",
-            latitude=12.889100,
-            longitude=77.584000,
-            pin_code="560078",
+    transformer_specs = (
+        ("DT-001", "JP Nagar DT 1", 12.889100, 77.584000),
+        ("DT-002", "JP Nagar DT 2", 12.890050, 77.585000),
+    )
+    for external_id, name, latitude, longitude in transformer_specs:
+        await session.execute(
+            insert(DistributionTransformer)
+            .values(
+                dt_id=external_id,
+                feeder_id=feeder_id,
+                name=name,
+                latitude=latitude,
+                longitude=longitude,
+                pin_code="560078",
+            )
+            .on_conflict_do_nothing(constraint="uq_distribution_transformers_dt_id")
         )
-        .on_conflict_do_nothing(constraint="uq_distribution_transformers_dt_id")
-    )
-    dt_id = require_seed_value(
-        await session.scalar(
-            select(DistributionTransformer.id).where(DistributionTransformer.dt_id == "DT-001")
-        ),
-        "DT-001",
-    )
+    transformers = {
+        external_id: internal_id
+        for external_id, internal_id in (
+            await session.execute(
+                select(DistributionTransformer.dt_id, DistributionTransformer.id).where(
+                    DistributionTransformer.dt_id.in_([spec[0] for spec in transformer_specs])
+                )
+            )
+        ).all()
+    }
+    if len(transformers) != len(transformer_specs):
+        raise RuntimeError("deterministic seed did not resolve all transformers")
 
     pole_specs = (
-        ("P-001", 12.889250, 77.584120),
-        ("P-002", 12.889430, 77.584260),
-        ("P-003", 12.889610, 77.584400),
-        ("P-004", 12.889790, 77.584540),
+        ("P-001", "DT-001", 12.889250, 77.584120),
+        ("P-002", "DT-001", 12.889430, 77.584260),
+        ("P-003", "DT-001", 12.889610, 77.584400),
+        ("P-004", "DT-001", 12.889790, 77.584540),
+        ("P-101", "DT-002", 12.890220, 77.585140),
+        ("P-102", "DT-002", 12.890400, 77.585300),
     )
-    for external_id, latitude, longitude in pole_specs:
+    for external_id, transformer_external_id, latitude, longitude in pole_specs:
         await session.execute(
             insert(Pole)
             .values(
                 pole_id=external_id,
-                dt_id=dt_id,
+                dt_id=transformers[transformer_external_id],
                 feeder_id=feeder_id,
                 latitude=latitude,
                 longitude=longitude,
@@ -129,7 +142,7 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
         ).all()
     }
     if len(poles) != len(pole_specs):
-        raise RuntimeError("deterministic seed did not resolve all four poles")
+        raise RuntimeError("deterministic seed did not resolve all poles")
 
     for pole_external_id in poles:
         device_external_id = f"DEV-{pole_external_id}"
@@ -150,7 +163,7 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
         ).all()
     }
     if len(devices) != len(poles):
-        raise RuntimeError("deterministic seed did not resolve all four devices")
+        raise RuntimeError("deterministic seed did not resolve all devices")
 
     for pole_external_id, pole_id in poles.items():
         device_id = devices[f"DEV-{pole_external_id}"]
@@ -182,16 +195,18 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
         )
 
     edge_specs = (
-        (None, "P-001", 20.0),
-        ("P-001", "P-002", 25.0),
-        ("P-002", "P-003", 25.0),
-        ("P-003", "P-004", 25.0),
+        ("DT-001", None, "P-001", 20.0),
+        ("DT-001", "P-001", "P-002", 25.0),
+        ("DT-001", "P-002", "P-003", 25.0),
+        ("DT-001", "P-003", "P-004", 25.0),
+        ("DT-002", None, "P-101", 20.0),
+        ("DT-002", "P-101", "P-102", 25.0),
     )
-    for parent_external_id, child_external_id, distance_m in edge_specs:
+    for transformer_external_id, parent_external_id, child_external_id, distance_m in edge_specs:
         await session.execute(
             insert(TopologyEdge)
             .values(
-                dt_id=dt_id,
+                dt_id=transformers[transformer_external_id],
                 parent_pole_id=(poles[parent_external_id] if parent_external_id else None),
                 child_pole_id=poles[child_external_id],
                 source=TopologySource.SURVEYED,
@@ -221,7 +236,8 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
     )
     edge_count = await session.scalar(
         select(func.count(TopologyEdge.id)).where(
-            TopologyEdge.dt_id == dt_id, TopologyEdge.topology_version == 1
+            TopologyEdge.dt_id.in_(transformers.values()),
+            TopologyEdge.topology_version == 1,
         )
     )
     live_count = await session.scalar(
@@ -236,7 +252,7 @@ async def seed_surveyed_network(session: AsyncSession) -> SeedSummary:
     return SeedSummary(
         substations=1,
         feeders=1,
-        transformers=1,
+        transformers=len(transformers),
         poles=len(poles),
         devices=len(devices),
         bindings=binding_count or 0,

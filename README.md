@@ -255,10 +255,11 @@ Not included:
 
 ## Current status
 
-VS-01 through VS-09 are complete. The tested backbone includes deterministic
+VS-01 through VS-09 and PB-01 through PB-02 are complete. The tested system includes deterministic
 startup, HTTP-to-Redis telemetry, idempotent Redis-to-PostgreSQL processing,
 surveyed-span localization, one-incident grouping, audited ticket workflow,
 telemetry-verified restoration, the operator console, and an isolated
-fresh-volume Playwright acceptance. Work now resumes from the post-backbone
-ordering in `docs/tasks.md`; broader fault classes, inferred topology, load
+fresh-volume Playwright acceptance, false-positive suppression, and deterministic
+span/DT/feeder classification. Work now resumes from PB-03 in
+`docs/POST-BACKBONE.md`; simultaneous faults, inferred topology, load
 measurement, deployment, and demo packaging remain to be built.

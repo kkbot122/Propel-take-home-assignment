@@ -1,5 +1,6 @@
 import json
 import logging
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -13,6 +14,7 @@ from propel.analysis.localization import localize_known_topology
 from propel.analysis.models import (
     DeviceEvidence,
     FaultCandidate,
+    FeederTransformerEvidence,
     NetworkSnapshot,
     PoleEvidence,
     ScheduledOutageWindow,
@@ -71,19 +73,29 @@ class PostgresDtSnapshotRepository:
                 analysis_at = await connection.scalar(select(func.now()))
                 transformer_row = (
                     await connection.execute(
-                        select(DistributionTransformer.id, Feeder.feeder_id)
+                        select(
+                            DistributionTransformer.id,
+                            DistributionTransformer.latitude,
+                            DistributionTransformer.longitude,
+                            DistributionTransformer.pin_code,
+                            Feeder.id.label("feeder_internal_id"),
+                            Feeder.feeder_id,
+                        )
                         .join(Feeder, Feeder.id == DistributionTransformer.feeder_id)
                         .where(DistributionTransformer.dt_id == dt_id)
                     )
                 ).one_or_none()
                 if analysis_at is None or transformer_row is None:
                     raise UnknownDistributionTransformerError(dt_id)
-                transformer_id = transformer_row.id
                 feeder_id = transformer_row.feeder_id
 
                 pole_rows = (
                     await connection.execute(
                         select(
+                            DistributionTransformer.dt_id.label("dt_external_id"),
+                            DistributionTransformer.latitude.label("dt_latitude"),
+                            DistributionTransformer.longitude.label("dt_longitude"),
+                            DistributionTransformer.pin_code.label("dt_pin_code"),
                             Pole.pole_id,
                             Pole.latitude,
                             Pole.longitude,
@@ -98,6 +110,8 @@ class PostgresDtSnapshotRepository:
                             DeviceHealth.battery_mv,
                             DeviceHealth.rssi,
                         )
+                        .select_from(DistributionTransformer)
+                        .join(Pole, Pole.dt_id == DistributionTransformer.id)
                         .outerjoin(PoleState, PoleState.pole_id == Pole.id)
                         .outerjoin(
                             DeviceBinding,
@@ -112,40 +126,96 @@ class PostgresDtSnapshotRepository:
                         )
                         .outerjoin(Device, Device.id == DeviceBinding.device_id)
                         .outerjoin(DeviceHealth, DeviceHealth.device_id == Device.id)
-                        .where(Pole.dt_id == transformer_id)
-                        .order_by(Pole.pole_id)
+                        .where(
+                            DistributionTransformer.feeder_id == transformer_row.feeder_internal_id
+                        )
+                        .order_by(DistributionTransformer.dt_id, Pole.pole_id)
                     )
                 ).all()
 
-                topology_version = (
-                    await connection.scalar(
-                        select(func.max(TopologyEdge.topology_version)).where(
-                            TopologyEdge.dt_id == transformer_id
-                        )
+                latest_topology = (
+                    select(
+                        TopologyEdge.dt_id,
+                        func.max(TopologyEdge.topology_version).label("topology_version"),
                     )
-                    or 0
+                    .group_by(TopologyEdge.dt_id)
+                    .subquery()
                 )
                 parent = aliased(Pole)
                 child = aliased(Pole)
                 span_rows = (
                     await connection.execute(
                         select(
+                            DistributionTransformer.dt_id.label("dt_external_id"),
+                            TopologyEdge.topology_version,
                             parent.pole_id.label("parent_pole_id"),
                             child.pole_id.label("child_pole_id"),
                             TopologyEdge.source,
                             TopologyEdge.edge_confidence,
                         )
                         .select_from(TopologyEdge)
+                        .join(
+                            latest_topology,
+                            and_(
+                                latest_topology.c.dt_id == TopologyEdge.dt_id,
+                                latest_topology.c.topology_version == TopologyEdge.topology_version,
+                            ),
+                        )
+                        .join(
+                            DistributionTransformer,
+                            DistributionTransformer.id == TopologyEdge.dt_id,
+                        )
                         .outerjoin(parent, parent.id == TopologyEdge.parent_pole_id)
                         .join(child, child.id == TopologyEdge.child_pole_id)
                         .where(
-                            TopologyEdge.dt_id == transformer_id,
-                            TopologyEdge.topology_version == topology_version,
+                            DistributionTransformer.feeder_id == transformer_row.feeder_internal_id
                         )
-                        .order_by(parent.pole_id.nullsfirst(), child.pole_id)
+                        .order_by(
+                            DistributionTransformer.dt_id,
+                            parent.pole_id.nullsfirst(),
+                            child.pole_id,
+                        )
                     )
                 ).all()
 
+                poles_by_dt: dict[str, list[PoleEvidence]] = defaultdict(list)
+                transformer_metadata: dict[str, tuple[float, float, str | None]] = {}
+                for row in pole_rows:
+                    poles_by_dt[row.dt_external_id].append(self._pole_evidence(row))
+                    transformer_metadata[row.dt_external_id] = (
+                        row.dt_latitude,
+                        row.dt_longitude,
+                        row.dt_pin_code,
+                    )
+
+                spans_by_dt: dict[str, list[TopologySpan]] = defaultdict(list)
+                versions_by_dt: dict[str, int] = defaultdict(int)
+                for row in span_rows:
+                    versions_by_dt[row.dt_external_id] = row.topology_version
+                    spans_by_dt[row.dt_external_id].append(
+                        TopologySpan(
+                            parent_pole_id=row.parent_pole_id,
+                            child_pole_id=row.child_pole_id,
+                            source=row.source,
+                            edge_confidence=row.edge_confidence,
+                        )
+                    )
+
+                transformers = tuple(
+                    FeederTransformerEvidence(
+                        dt_id=transformer_external_id,
+                        latitude=metadata[0],
+                        longitude=metadata[1],
+                        pin_code=metadata[2],
+                        topology_version=versions_by_dt[transformer_external_id],
+                        poles=tuple(poles_by_dt[transformer_external_id]),
+                        spans=tuple(spans_by_dt[transformer_external_id]),
+                    )
+                    for transformer_external_id, metadata in sorted(transformer_metadata.items())
+                )
+                focal_transformer = next(
+                    transformer for transformer in transformers if transformer.dt_id == dt_id
+                )
                 span_scope_ids = tuple(
                     f"{row.parent_pole_id}->{row.child_pole_id}"
                     for row in span_rows
@@ -158,7 +228,7 @@ class PostgresDtSnapshotRepository:
                     ),
                     and_(
                         ScheduledOutage.scope == ScheduledOutageScope.DISTRIBUTION_TRANSFORMER,
-                        ScheduledOutage.scope_id == dt_id,
+                        ScheduledOutage.scope_id.in_(tuple(poles_by_dt)),
                     ),
                     and_(
                         ScheduledOutage.scope == ScheduledOutageScope.SPAN,
@@ -189,18 +259,13 @@ class PostgresDtSnapshotRepository:
         return NetworkSnapshot(
             dt_id=dt_id,
             feeder_id=feeder_id,
-            topology_version=topology_version,
+            dt_latitude=transformer_row.latitude,
+            dt_longitude=transformer_row.longitude,
+            dt_pin_code=transformer_row.pin_code,
+            topology_version=focal_transformer.topology_version,
             analysis_at=analysis_at,
-            poles=tuple(self._pole_evidence(row) for row in pole_rows),
-            spans=tuple(
-                TopologySpan(
-                    parent_pole_id=row.parent_pole_id,
-                    child_pole_id=row.child_pole_id,
-                    source=row.source,
-                    edge_confidence=row.edge_confidence,
-                )
-                for row in span_rows
-            ),
+            poles=focal_transformer.poles,
+            spans=focal_transformer.spans,
             scheduled_outages=tuple(
                 ScheduledOutageWindow(
                     outage_id=outage.outage_id,
@@ -213,6 +278,7 @@ class PostgresDtSnapshotRepository:
                 )
                 for outage in scheduled_outage_rows
             ),
+            feeder_transformers=transformers,
         )
 
     @staticmethod
@@ -254,6 +320,11 @@ class RedisAnalysisScheduler:
         due_set_name: str,
         live_freshness_seconds: float,
         retry_delay_seconds: float,
+        dt_fault_ratio: float = 0.6,
+        dt_min_branches: int = 2,
+        feeder_fault_ratio: float = 0.6,
+        feeder_min_dts: int = 2,
+        correlation_window_seconds: float = 10,
         schedule_early_grace_seconds: float = 600,
         schedule_overrun_grace_seconds: float = 2_400,
         candidate_sink: FaultCandidateSink | None = None,
@@ -265,6 +336,11 @@ class RedisAnalysisScheduler:
         self._live_freshness = timedelta(seconds=live_freshness_seconds)
         self._schedule_early_grace = timedelta(seconds=schedule_early_grace_seconds)
         self._schedule_overrun_grace = timedelta(seconds=schedule_overrun_grace_seconds)
+        self._dt_fault_ratio = dt_fault_ratio
+        self._dt_min_branches = dt_min_branches
+        self._feeder_fault_ratio = feeder_fault_ratio
+        self._feeder_min_dts = feeder_min_dts
+        self._correlation_window_seconds = correlation_window_seconds
         self._retry_delay_seconds = retry_delay_seconds
         self._candidate_sink = candidate_sink
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -286,6 +362,11 @@ class RedisAnalysisScheduler:
                 live_freshness=self._live_freshness,
                 schedule_early_grace=self._schedule_early_grace,
                 schedule_overrun_grace=self._schedule_overrun_grace,
+                dt_fault_ratio=self._dt_fault_ratio,
+                dt_min_branches=self._dt_min_branches,
+                feeder_fault_ratio=self._feeder_fault_ratio,
+                feeder_min_dts=self._feeder_min_dts,
+                correlation_window_seconds=self._correlation_window_seconds,
             )
             if self._candidate_sink is not None and candidates:
                 await self._candidate_sink.persist_candidates(candidates)

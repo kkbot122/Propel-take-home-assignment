@@ -1,8 +1,10 @@
+import { divIcon } from 'leaflet'
 import type { LatLngBoundsExpression, LatLngExpression } from 'leaflet'
 import { useEffect, useMemo } from 'react'
 import {
   CircleMarker,
   MapContainer,
+  Marker,
   Polyline,
   Popup,
   TileLayer,
@@ -10,7 +12,13 @@ import {
   useMap,
 } from 'react-leaflet'
 
-import type { Incident, NetworkPole, NetworkTopology, PoleStatus } from '../api/types'
+import type {
+  Incident,
+  NetworkOverview,
+  NetworkPole,
+  NetworkTopology,
+  PoleStatus,
+} from '../api/types'
 
 const DEFAULT_CENTER: LatLngExpression = [12.88952, 77.58433]
 const TILE_URL =
@@ -23,6 +31,31 @@ const poleColors: Record<PoleStatus, string> = {
   UNKNOWN: '#7f8c86',
   NO_DEVICE: '#66706c',
 }
+
+const feederSourceIcon = divIcon({
+  className: 'asset-marker asset-marker-feeder',
+  html: '<span>F</span>',
+  iconAnchor: [14, 14],
+  iconSize: [28, 28],
+})
+const selectedFeederSourceIcon = divIcon({
+  className: 'asset-marker asset-marker-feeder selected',
+  html: '<span>F</span>',
+  iconAnchor: [16, 16],
+  iconSize: [32, 32],
+})
+const transformerIcon = divIcon({
+  className: 'asset-marker asset-marker-dt',
+  html: '<span>DT</span>',
+  iconAnchor: [14, 14],
+  iconSize: [28, 28],
+})
+const selectedTransformerIcon = divIcon({
+  className: 'asset-marker asset-marker-dt selected',
+  html: '<span>DT</span>',
+  iconAnchor: [16, 16],
+  iconSize: [32, 32],
+})
 
 interface FitNetworkProps {
   points: LatLngExpression[]
@@ -46,14 +79,19 @@ function FitNetwork({ points, focusKey }: FitNetworkProps) {
 
 interface NetworkMapProps {
   poles: NetworkPole[]
-  topology: NetworkTopology | undefined
+  topologies: NetworkTopology[]
+  overview: NetworkOverview | null
   selectedIncident: Incident | null
 }
 
-export function NetworkMap({ poles, topology, selectedIncident }: NetworkMapProps) {
+export function NetworkMap({ poles, topologies, overview, selectedIncident }: NetworkMapProps) {
   const polesById = useMemo(
     () => new Map(poles.map((pole) => [pole.pole_id, pole])),
     [poles],
+  )
+  const transformersById = useMemo(
+    () => new Map(overview?.transformers.map((transformer) => [transformer.dt_id, transformer])),
+    [overview],
   )
   const selectedSpan =
     selectedIncident?.suspected_asset_type === 'SPAN'
@@ -63,14 +101,33 @@ export function NetworkMap({ poles, topology, selectedIncident }: NetworkMapProp
     const networkPoints = poles.map(
       (pole) => [pole.latitude, pole.longitude] satisfies LatLngExpression,
     )
+    if (overview) {
+      networkPoints.push([overview.substation.latitude, overview.substation.longitude])
+      networkPoints.push(
+        ...overview.transformers.map(
+          (transformer) =>
+            [transformer.latitude, transformer.longitude] satisfies LatLngExpression,
+        ),
+      )
+    }
     if (selectedIncident) {
       networkPoints.push([selectedIncident.latitude, selectedIncident.longitude])
     }
     return networkPoints
-  }, [poles, selectedIncident])
+  }, [overview, poles, selectedIncident])
+  const feederSelected =
+    selectedIncident?.suspected_asset_type === 'FEEDER' &&
+    selectedIncident.suspected_asset_id === overview?.feeder_id
+  const selectedTransformerId =
+    selectedIncident?.suspected_asset_type === 'DISTRIBUTION_TRANSFORMER'
+      ? selectedIncident.suspected_asset_id
+      : null
+  const faultFocusLabel = selectedIncident
+    ? `${selectedIncident.classification.replaceAll('_', ' ')} focus`
+    : null
 
   return (
-    <div className="map-frame" aria-label="Seeded DT-001 network map">
+    <div className="map-frame" aria-label="Seeded FDR-001 network map">
       <MapContainer
         center={DEFAULT_CENTER}
         zoom={16}
@@ -86,9 +143,32 @@ export function NetworkMap({ poles, topology, selectedIncident }: NetworkMapProp
           focusKey={selectedIncident?.incident_id ?? 'network'}
         />
 
-        {topology?.spans.map((span) => {
-          if (span.parent_pole_id === null) return null
-          const parent = polesById.get(span.parent_pole_id)
+        {overview?.transformers.map((transformer) => (
+          <Polyline
+            key={`${overview.feeder_id}-${transformer.dt_id}`}
+            positions={[
+              [overview.substation.latitude, overview.substation.longitude],
+              [transformer.latitude, transformer.longitude],
+            ]}
+            pathOptions={{
+              color: feederSelected ? '#b6321b' : '#735a92',
+              weight: feederSelected ? 7 : 4,
+              opacity: feederSelected ? 1 : 0.8,
+              dashArray: feederSelected ? '12 7' : '8 7',
+            }}
+          >
+            <Tooltip sticky>
+              {overview.feeder_id} · source to {transformer.dt_id}
+            </Tooltip>
+          </Polyline>
+        ))}
+
+        {topologies.flatMap((topology) =>
+          topology.spans.map((span) => ({ span, topology })),
+        ).map(({ span, topology }) => {
+          const transformer = transformersById.get(topology.dt_id)
+          const parent =
+            span.parent_pole_id === null ? transformer : polesById.get(span.parent_pole_id)
           const child = polesById.get(span.child_pole_id)
           if (!parent || !child) return null
           const selected =
@@ -107,9 +187,77 @@ export function NetworkMap({ poles, topology, selectedIncident }: NetworkMapProp
               }}
             >
               <Tooltip>
-                {span.parent_pole_id} → {span.child_pole_id} · {span.source}
+                {span.parent_pole_id ?? topology.dt_id} → {span.child_pole_id} · {span.source}
               </Tooltip>
             </Polyline>
+          )
+        })}
+
+        {selectedIncident && (
+          <CircleMarker
+            center={[selectedIncident.latitude, selectedIncident.longitude]}
+            radius={
+              selectedIncident.suspected_asset_type === 'FEEDER'
+                ? 34
+                : selectedIncident.suspected_asset_type === 'DISTRIBUTION_TRANSFORMER'
+                  ? 28
+                  : 22
+            }
+            pathOptions={{
+              color: '#a92f1e',
+              weight: 5,
+              fillColor: '#f06b49',
+              fillOpacity: 0.12,
+              dashArray: '9 5',
+            }}
+          >
+            <Tooltip className="fault-tooltip" direction="bottom" offset={[0, 24]} permanent>
+              {selectedIncident.status === 'SUPPRESSED'
+                ? 'Suppressed diagnostic'
+                : faultFocusLabel}
+            </Tooltip>
+          </CircleMarker>
+        )}
+
+        {overview && (
+          <Marker
+            position={[overview.substation.latitude, overview.substation.longitude]}
+            icon={feederSelected ? selectedFeederSourceIcon : feederSourceIcon}
+            zIndexOffset={500}
+          >
+            <Tooltip className="asset-tooltip" permanent direction="left" offset={[-10, 0]}>
+              {overview.feeder_id} source
+            </Tooltip>
+            <Popup>
+              <strong>{overview.feeder_id}</strong> · {overview.name}
+              <br />
+              Source: {overview.substation.substation_id} · {overview.substation.name}
+              <br />
+              PIN: {overview.substation.pin_code}
+            </Popup>
+          </Marker>
+        )}
+
+        {overview?.transformers.map((transformer) => {
+          const selected = transformer.dt_id === selectedTransformerId || feederSelected
+          return (
+            <Marker
+              key={transformer.dt_id}
+              position={[transformer.latitude, transformer.longitude]}
+              icon={selected ? selectedTransformerIcon : transformerIcon}
+              zIndexOffset={400}
+            >
+              <Tooltip className="asset-tooltip" permanent direction="top" offset={[0, -11]}>
+                {transformer.dt_id}
+              </Tooltip>
+              <Popup>
+                <strong>{transformer.dt_id}</strong> · {transformer.name}
+                <br />
+                Distribution transformer
+                <br />
+                PIN: {transformer.pin_code}
+              </Popup>
+            </Marker>
           )
         })}
 
@@ -119,8 +267,10 @@ export function NetworkMap({ poles, topology, selectedIncident }: NetworkMapProp
             center={[pole.latitude, pole.longitude]}
             radius={selectedIncident?.affected_pole_ids.includes(pole.pole_id) ? 10 : 8}
             pathOptions={{
-              color: '#f4f1e8',
-              weight: 2,
+              color: selectedIncident?.affected_pole_ids.includes(pole.pole_id)
+                ? '#b6321b'
+                : '#f4f1e8',
+              weight: selectedIncident?.affected_pole_ids.includes(pole.pole_id) ? 4 : 2,
               fillColor: poleColors[pole.state],
               fillOpacity: 1,
             }}
@@ -137,26 +287,17 @@ export function NetworkMap({ poles, topology, selectedIncident }: NetworkMapProp
             </Popup>
           </CircleMarker>
         ))}
-
-        {selectedIncident && (
-          <CircleMarker
-            center={[selectedIncident.latitude, selectedIncident.longitude]}
-            radius={17}
-            pathOptions={{
-              color: '#ffb29e',
-              weight: 3,
-              fillColor: '#e75f3b',
-              fillOpacity: 0.24,
-            }}
-          >
-            <Tooltip direction="bottom" offset={[0, 16]} permanent>
-              {selectedIncident.status === 'SUPPRESSED' ? 'Suppressed diagnostic' : 'Probable fault'}
-            </Tooltip>
-          </CircleMarker>
-        )}
       </MapContainer>
 
-      <ul className="map-legend" aria-label="Pole state legend">
+      <ul className="map-legend" aria-label="Network asset and pole state legend">
+        <li>
+          <span className="legend-feeder" aria-hidden="true" />
+          FEEDER
+        </li>
+        <li>
+          <span className="legend-dt" aria-hidden="true" />
+          DT
+        </li>
         {(['LIVE', 'DARK', 'STALE', 'UNKNOWN'] as PoleStatus[]).map((state) => (
           <li key={state}>
             <span style={{ background: poleColors[state] }} aria-hidden="true" />

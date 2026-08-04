@@ -7,6 +7,7 @@ from propel.analysis.models import (
     CandidateSuppression,
     ConfidenceComponents,
     FaultCandidate,
+    FeederTransformerEvidence,
     NetworkSnapshot,
     PoleEvidence,
     ScheduledOutageWindow,
@@ -26,6 +27,10 @@ DEFAULT_LIVE_FRESHNESS = timedelta(minutes=32)
 DEFAULT_SCHEDULE_EARLY_GRACE = timedelta(minutes=10)
 DEFAULT_SCHEDULE_OVERRUN_GRACE = timedelta(minutes=40)
 CORRELATION_WINDOW_SECONDS = 10.0
+DEFAULT_DT_FAULT_RATIO = 0.6
+DEFAULT_DT_MIN_BRANCHES = 2
+DEFAULT_FEEDER_FAULT_RATIO = 0.6
+DEFAULT_FEEDER_MIN_DTS = 2
 
 
 class InvalidTopologySnapshotError(Exception):
@@ -38,10 +43,96 @@ def localize_known_topology(
     live_freshness: timedelta = DEFAULT_LIVE_FRESHNESS,
     schedule_early_grace: timedelta = DEFAULT_SCHEDULE_EARLY_GRACE,
     schedule_overrun_grace: timedelta = DEFAULT_SCHEDULE_OVERRUN_GRACE,
+    dt_fault_ratio: float = DEFAULT_DT_FAULT_RATIO,
+    dt_min_branches: int = DEFAULT_DT_MIN_BRANCHES,
+    feeder_fault_ratio: float = DEFAULT_FEEDER_FAULT_RATIO,
+    feeder_min_dts: int = DEFAULT_FEEDER_MIN_DTS,
+    correlation_window_seconds: float = CORRELATION_WINDOW_SECONDS,
 ) -> list[FaultCandidate]:
     poles = _pole_index(snapshot)
     spans = tuple(span for span in snapshot.spans if span.source == TopologySource.SURVEYED)
     children = _build_children(poles, spans)
+    transformers = _snapshot_transformers(snapshot)
+    raw_dt_candidates = tuple(
+        candidate
+        for transformer in transformers
+        if (
+            candidate := _build_dt_candidate(
+                snapshot,
+                transformer,
+                live_freshness=live_freshness,
+                dt_fault_ratio=dt_fault_ratio,
+                dt_min_branches=dt_min_branches,
+            )
+        )
+        is not None
+    )
+    dt_candidates = tuple(
+        _apply_scheduled_suppression(
+            snapshot,
+            candidate,
+            early_grace=schedule_early_grace,
+            overrun_grace=schedule_overrun_grace,
+        )
+        for candidate in raw_dt_candidates
+    )
+    feeder_candidate = _build_feeder_candidate(
+        snapshot,
+        tuple(
+            candidate
+            for candidate in dt_candidates
+            if candidate.classification == FaultClass.DT_FAULT
+        ),
+        transformers,
+        live_freshness=live_freshness,
+        feeder_fault_ratio=feeder_fault_ratio,
+        feeder_min_dts=feeder_min_dts,
+        correlation_window_seconds=correlation_window_seconds,
+    )
+    if feeder_candidate is not None:
+        feeder_candidate = _apply_scheduled_suppression(
+            snapshot,
+            feeder_candidate,
+            early_grace=schedule_early_grace,
+            overrun_grace=schedule_overrun_grace,
+        )
+
+    span_candidates = _build_span_candidates(
+        snapshot,
+        poles,
+        spans,
+        children,
+        live_freshness=live_freshness,
+        schedule_early_grace=schedule_early_grace,
+        schedule_overrun_grace=schedule_overrun_grace,
+    )
+    if feeder_candidate is not None:
+        if snapshot.dt_id in feeder_candidate.affected_dt_ids:
+            return [feeder_candidate]
+        return sorted(
+            [feeder_candidate, *span_candidates],
+            key=lambda candidate: (candidate.classification.value, candidate.suspected_asset_id),
+        )
+
+    focal_dt_candidate = next(
+        (candidate for candidate in dt_candidates if candidate.dt_id == snapshot.dt_id),
+        None,
+    )
+    if focal_dt_candidate is not None:
+        return [focal_dt_candidate]
+    return span_candidates
+
+
+def _build_span_candidates(
+    snapshot: NetworkSnapshot,
+    poles: dict[str, PoleEvidence],
+    spans: tuple[TopologySpan, ...],
+    children: dict[str, tuple[str, ...]],
+    *,
+    live_freshness: timedelta,
+    schedule_early_grace: timedelta,
+    schedule_overrun_grace: timedelta,
+) -> list[FaultCandidate]:
     candidates: list[FaultCandidate] = []
 
     for span in sorted(
@@ -59,7 +150,7 @@ def localize_known_topology(
         subtree_ids = _collect_subtree(span.child_pole_id, children)
         candidate = _build_candidate(snapshot, span, poles, subtree_ids)
         candidates.append(
-            _classify_candidate(
+            _classify_span_candidate(
                 snapshot,
                 candidate,
                 poles,
@@ -72,7 +163,253 @@ def localize_known_topology(
     return sorted(candidates, key=lambda candidate: candidate.suspected_asset_id)
 
 
-def _classify_candidate(
+def _snapshot_transformers(
+    snapshot: NetworkSnapshot,
+) -> tuple[FeederTransformerEvidence, ...]:
+    if snapshot.feeder_transformers:
+        return tuple(sorted(snapshot.feeder_transformers, key=lambda item: item.dt_id))
+    return (
+        FeederTransformerEvidence(
+            dt_id=snapshot.dt_id,
+            latitude=snapshot.dt_latitude,
+            longitude=snapshot.dt_longitude,
+            pin_code=snapshot.dt_pin_code,
+            topology_version=snapshot.topology_version,
+            poles=snapshot.poles,
+            spans=snapshot.spans,
+        ),
+    )
+
+
+def _build_dt_candidate(
+    snapshot: NetworkSnapshot,
+    transformer: FeederTransformerEvidence,
+    *,
+    live_freshness: timedelta,
+    dt_fault_ratio: float,
+    dt_min_branches: int,
+) -> FaultCandidate | None:
+    poles = {pole.pole_id: pole for pole in transformer.poles}
+    surveyed_spans = tuple(
+        span for span in transformer.spans if span.source == TopologySource.SURVEYED
+    )
+    children = _build_children(poles, surveyed_spans)
+    observable = tuple(
+        pole
+        for pole in transformer.poles
+        if pole.device is not None
+        and pole.device.status == DeviceHealthStatus.HEALTHY
+        and pole.device.can_report_power_loss
+        and pole.device.last_seen_at is not None
+        and timedelta(0) <= snapshot.analysis_at - pole.device.last_seen_at <= live_freshness
+        and pole.state != PoleStatus.NO_DEVICE
+    )
+    dark = tuple(pole for pole in observable if pole.state == PoleStatus.DARK)
+    if not observable or not dark or any(pole.state_received_at is None for pole in dark):
+        return None
+
+    root_ids = tuple(
+        sorted(span.child_pole_id for span in surveyed_spans if span.parent_pole_id is None)
+    )
+    if not root_ids or any(poles[root_id].state != PoleStatus.DARK for root_id in root_ids):
+        return None
+    branch_ids = tuple(
+        sorted(
+            branch_id for root_id in root_ids for branch_id in (children.get(root_id) or (root_id,))
+        )
+    )
+    affected_branches = tuple(
+        branch_id
+        for branch_id in branch_ids
+        if any(
+            poles[pole_id].state == PoleStatus.DARK
+            for pole_id in _collect_subtree(branch_id, children)
+        )
+    )
+    dark_ratio = len(dark) / len(observable)
+    all_observable_dark = len(dark) == len(observable)
+    if not all_observable_dark and (
+        dark_ratio < dt_fault_ratio or len(affected_branches) < dt_min_branches
+    ):
+        return None
+
+    onset_at = min(pole.state_received_at for pole in dark if pole.state_received_at is not None)
+    contradictions = tuple(
+        sorted(
+            pole.pole_id
+            for pole in observable
+            if pole.state == PoleStatus.LIVE
+            and pole.state_received_at is not None
+            and pole.state_received_at > onset_at
+        )
+    )
+    pre_onset_live = tuple(
+        sorted(
+            pole.pole_id
+            for pole in observable
+            if pole.state == PoleStatus.LIVE
+            and pole.state_received_at is not None
+            and pole.state_received_at <= onset_at
+        )
+    )
+    spread = _dark_observation_spread(dark)
+    base_components = _confidence_components(observable, dark, contradictions, spread)
+    components = replace(base_components, boundary_clarity=20)
+    score = max(0, min(100, sum(components.as_dict().values())))
+    affected_ids = tuple(sorted(pole.pole_id for pole in dark))
+    positive_reasons = (
+        f"{len(dark)}/{len(observable)} recently healthy observable poles are DARK",
+        f"dark evidence covers {len(affected_branches)} surveyed root branches",
+        "no lower live-to-dark span boundary explains loss of the transformer root",
+    )
+    negative_reasons = (
+        ("post-onset LIVE poles inside transformer scope: " + ", ".join(contradictions),)
+        if contradictions
+        else ()
+    )
+    return FaultCandidate(
+        dt_id=transformer.dt_id,
+        feeder_id=snapshot.feeder_id,
+        affected_dt_ids=(transformer.dt_id,),
+        topology_version=transformer.topology_version,
+        analysis_at=snapshot.analysis_at,
+        classification=FaultClass.DT_FAULT,
+        suspected_asset_type=SuspectedAssetType.DISTRIBUTION_TRANSFORMER,
+        suspected_asset_id=transformer.dt_id,
+        parent_pole_id=None,
+        child_pole_id=None,
+        affected_pole_ids=affected_ids,
+        precision=LocalizationPrecision.DT_LEVEL,
+        topology_source=TopologySource.SURVEYED,
+        latitude=transformer.latitude,
+        longitude=transformer.longitude,
+        pin_code=transformer.pin_code,
+        confidence_score=score,
+        confidence_level="HIGH" if score >= 80 else "MEDIUM" if score >= 50 else "LOW",
+        confidence_reason=(
+            f"Transformer-wide loss with {len(dark)}/{len(observable)} observable poles DARK "
+            f"across {len(affected_branches)} root branches."
+        ),
+        evidence=CandidateEvidence(
+            onset_at=onset_at,
+            subtree_pole_ids=tuple(sorted(poles)),
+            observable_pole_count=len(observable),
+            dark_pole_count=len(dark),
+            post_onset_live_contradictions=contradictions,
+            pre_onset_live_observations=pre_onset_live,
+            dark_observation_spread_seconds=spread,
+            positive_reasons=positive_reasons,
+            negative_reasons=negative_reasons,
+            components=components,
+        ),
+    )
+
+
+def _build_feeder_candidate(
+    snapshot: NetworkSnapshot,
+    dt_candidates: tuple[FaultCandidate, ...],
+    transformers: tuple[FeederTransformerEvidence, ...],
+    *,
+    live_freshness: timedelta,
+    feeder_fault_ratio: float,
+    feeder_min_dts: int,
+    correlation_window_seconds: float,
+) -> FaultCandidate | None:
+    eligible_transformers = tuple(
+        transformer
+        for transformer in transformers
+        if any(
+            pole.device is not None
+            and pole.device.status == DeviceHealthStatus.HEALTHY
+            and pole.device.can_report_power_loss
+            and pole.device.last_seen_at is not None
+            and timedelta(0) <= snapshot.analysis_at - pole.device.last_seen_at <= live_freshness
+            and pole.state != PoleStatus.NO_DEVICE
+            for pole in transformer.poles
+        )
+    )
+    affected_dt_ids = tuple(sorted(candidate.dt_id for candidate in dt_candidates))
+    if not eligible_transformers or len(affected_dt_ids) < feeder_min_dts:
+        return None
+    affected_ratio = len(affected_dt_ids) / len(eligible_transformers)
+    if affected_ratio < feeder_fault_ratio:
+        return None
+
+    onset_at = min(candidate.evidence.onset_at for candidate in dt_candidates)
+    onset_spread = (
+        max(candidate.evidence.onset_at for candidate in dt_candidates) - onset_at
+    ).total_seconds()
+    correlated = onset_spread <= correlation_window_seconds
+    classification = FaultClass.FEEDER_FAULT if correlated else FaultClass.UNCONFIRMED_OUTAGE
+    affected_pole_ids = tuple(
+        sorted({pole_id for candidate in dt_candidates for pole_id in candidate.affected_pole_ids})
+    )
+    observable_count = sum(candidate.evidence.observable_pole_count for candidate in dt_candidates)
+    dark_count = sum(candidate.evidence.dark_pole_count for candidate in dt_candidates)
+    components = ConfidenceComponents(
+        topology=25,
+        boundary_clarity=20 if correlated else 5,
+        downstream_corroboration=round(25 * affected_ratio),
+        temporal_coherence=10 if correlated else 0,
+        sensor_quality=10,
+        contradiction_penalty=0 if correlated else -20,
+    )
+    score = max(0, min(100, sum(components.as_dict().values())))
+    latitude = sum(candidate.latitude for candidate in dt_candidates) / len(dt_candidates)
+    longitude = sum(candidate.longitude for candidate in dt_candidates) / len(dt_candidates)
+    pin_codes = tuple(
+        sorted({candidate.pin_code for candidate in dt_candidates if candidate.pin_code})
+    )
+    timing_reason = (
+        f"DT onsets are correlated within {onset_spread:.3f} seconds"
+        if correlated
+        else (
+            f"DT onset spread of {onset_spread:.3f} seconds exceeds the "
+            f"{correlation_window_seconds:.3f}-second feeder correlation window"
+        )
+    )
+    return FaultCandidate(
+        dt_id=affected_dt_ids[0],
+        feeder_id=snapshot.feeder_id,
+        affected_dt_ids=affected_dt_ids,
+        topology_version=max(candidate.topology_version for candidate in dt_candidates),
+        analysis_at=snapshot.analysis_at,
+        classification=classification,
+        suspected_asset_type=SuspectedAssetType.FEEDER,
+        suspected_asset_id=snapshot.feeder_id,
+        parent_pole_id=None,
+        child_pole_id=None,
+        affected_pole_ids=affected_pole_ids,
+        precision=LocalizationPrecision.FEEDER_LEVEL,
+        topology_source=TopologySource.SURVEYED,
+        latitude=latitude,
+        longitude=longitude,
+        pin_code=pin_codes[0] if len(pin_codes) == 1 else None,
+        confidence_score=score,
+        confidence_level="HIGH" if score >= 80 else "MEDIUM" if score >= 50 else "LOW",
+        confidence_reason=(
+            f"{len(affected_dt_ids)}/{len(eligible_transformers)} observable DTs are affected; "
+            f"{timing_reason}."
+        ),
+        evidence=CandidateEvidence(
+            onset_at=onset_at,
+            subtree_pole_ids=affected_pole_ids,
+            observable_pole_count=observable_count,
+            dark_pole_count=dark_count,
+            post_onset_live_contradictions=(),
+            pre_onset_live_observations=(),
+            dark_observation_spread_seconds=onset_spread,
+            positive_reasons=(
+                f"{len(affected_dt_ids)}/{len(eligible_transformers)} feeder DTs have DT-wide loss",
+                timing_reason,
+            ),
+            negative_reasons=(() if correlated else (timing_reason,)),
+            components=components,
+        ),
+    )
+
+
+def _classify_span_candidate(
     snapshot: NetworkSnapshot,
     candidate: FaultCandidate,
     poles: dict[str, PoleEvidence],
@@ -81,33 +418,14 @@ def _classify_candidate(
     schedule_early_grace: timedelta,
     schedule_overrun_grace: timedelta,
 ) -> FaultCandidate:
-    scheduled_outage = _matching_scheduled_outage(
+    candidate = _apply_scheduled_suppression(
         snapshot,
         candidate,
         early_grace=schedule_early_grace,
         overrun_grace=schedule_overrun_grace,
     )
-    if scheduled_outage is not None:
-        reason = (
-            f"Observation overlaps scheduled outage {scheduled_outage.outage_id} "
-            f"for {scheduled_outage.scope.value} {scheduled_outage.scope_id}: "
-            f"{scheduled_outage.reason}"
-        )
-        return replace(
-            candidate,
-            classification=FaultClass.SCHEDULED_OUTAGE,
-            confidence_reason=reason,
-            evidence=replace(
-                candidate.evidence,
-                positive_reasons=candidate.evidence.positive_reasons
-                + (f"scheduled outage {scheduled_outage.outage_id} covers this observation",),
-            ),
-            suppression=CandidateSuppression(
-                reason=reason,
-                source=scheduled_outage.source,
-                external_id=scheduled_outage.outage_id,
-            ),
-        )
+    if candidate.classification == FaultClass.SCHEDULED_OUTAGE:
+        return candidate
 
     child = poles[candidate.child_pole_id]
     credible_live_descendants = tuple(
@@ -147,6 +465,43 @@ def _classify_candidate(
     return candidate
 
 
+def _apply_scheduled_suppression(
+    snapshot: NetworkSnapshot,
+    candidate: FaultCandidate,
+    *,
+    early_grace: timedelta,
+    overrun_grace: timedelta,
+) -> FaultCandidate:
+    scheduled_outage = _matching_scheduled_outage(
+        snapshot,
+        candidate,
+        early_grace=early_grace,
+        overrun_grace=overrun_grace,
+    )
+    if scheduled_outage is None:
+        return candidate
+    reason = (
+        f"Observation overlaps scheduled outage {scheduled_outage.outage_id} "
+        f"for {scheduled_outage.scope.value} {scheduled_outage.scope_id}: "
+        f"{scheduled_outage.reason}"
+    )
+    return replace(
+        candidate,
+        classification=FaultClass.SCHEDULED_OUTAGE,
+        confidence_reason=reason,
+        evidence=replace(
+            candidate.evidence,
+            positive_reasons=candidate.evidence.positive_reasons
+            + (f"scheduled outage {scheduled_outage.outage_id} covers this observation",),
+        ),
+        suppression=CandidateSuppression(
+            reason=reason,
+            source=scheduled_outage.source,
+            external_id=scheduled_outage.outage_id,
+        ),
+    )
+
+
 def _matching_scheduled_outage(
     snapshot: NetworkSnapshot,
     candidate: FaultCandidate,
@@ -162,9 +517,12 @@ def _matching_scheduled_outage(
 
     def covers(scope: ScheduledOutageScope, scope_id: str) -> bool:
         if scope == ScheduledOutageScope.SPAN:
-            return scope_id == f"{candidate.parent_pole_id}->{candidate.child_pole_id}"
+            return (
+                candidate.suspected_asset_type == SuspectedAssetType.SPAN
+                and scope_id == f"{candidate.parent_pole_id}->{candidate.child_pole_id}"
+            )
         if scope == ScheduledOutageScope.DISTRIBUTION_TRANSFORMER:
-            return scope_id == snapshot.dt_id
+            return candidate.affected_dt_ids == (scope_id,)
         return scope_id == snapshot.feeder_id
 
     matches = (
@@ -297,6 +655,8 @@ def _build_candidate(
 
     return FaultCandidate(
         dt_id=snapshot.dt_id,
+        feeder_id=snapshot.feeder_id,
+        affected_dt_ids=(snapshot.dt_id,),
         topology_version=snapshot.topology_version,
         analysis_at=snapshot.analysis_at,
         classification=FaultClass.SPAN_FAULT,

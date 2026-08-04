@@ -664,10 +664,10 @@ These values are configuration, are covered by fixed-snapshot tests, and must be
 | DT correlation/debounce window | 10 seconds |
 | Pole becomes `STALE` | No accepted event for 32 minutes |
 | Minimum span corroboration | Dark boundary child plus one dark eligible descendant, or a terminal boundary child |
-| DT-wide outage | At least 60% of recently healthy eligible poles dark across at least two branches, with no lower boundary explaining the pattern |
+| DT-wide outage | Every observable pole dark, or at least 60% of recently healthy eligible poles dark across at least two branches, with no lower boundary explaining the pattern |
 | Feeder outage | At least 60% of the feeder's DTs have DT-wide evidence, with a minimum of two DTs, inside the same correlation window |
 | Scheduled-outage grace | 10 minutes early and 40 minutes late |
-| Restoration verification | At least 80% of the frozen eligible set reports fresh `LIVE`, the boundary child is live, and no member reports fresh `DARK` after the repair claim |
+| Restoration verification | At least 80% of the frozen eligible set reports fresh `LIVE`; the span boundary child, or every affected DT root for broader faults, is live; and no member reports fresh `DARK` after the repair claim |
 | Restoration stabilization | 10 seconds |
 
 Eligible poles exclude `NO_DEVICE`, already-offline devices, and devices without sufficiently recent pre-incident evidence. Firmware 1.2 devices and missing dying messages reduce coverage; their silence never counts as confirmed darkness. Small terminal branches are allowed to form a candidate from a single explicit dark boundary child, but receive a confidence penalty and may remain `UNCONFIRMED_OUTAGE` until corroborated.
@@ -715,6 +715,7 @@ The exact schema will be maintained in generated OpenAPI documentation. Planned 
 | `POST` | `/api/tickets/{id}/acknowledge`     | Acknowledge a detected ticket              |
 | `POST` | `/api/tickets/{id}/assign`          | Assign a crew stub                         |
 | `POST` | `/api/tickets/{id}/resolve`         | Record a repair claim                      |
+| `GET`  | `/api/network/overview/{feeder_id}` | Read feeder source and DT map assets        |
 | `GET`  | `/api/network/poles`                | Read poles for map display                 |
 | `GET`  | `/api/network/topology/{dt_id}`     | Read surveyed or inferred DT topology      |
 | `GET`  | `/api/scheduled-outages`            | Read current scheduled outages             |

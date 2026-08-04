@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from propel.domain.enums import SimulatorFaultStatus
+from propel.domain.enums import SimulatorFaultStatus, SimulatorFaultType
 from propel.telemetry.ingestion import TelemetryCommand
 
 
@@ -16,9 +16,11 @@ class SimulatorEmissionReceipt:
 @dataclass(frozen=True, slots=True)
 class SimulatedFaultView:
     fault_id: UUID
-    dt_id: str
-    parent_pole_id: str
-    child_pole_id: str
+    fault_type: SimulatorFaultType
+    feeder_id: str | None
+    dt_id: str | None
+    parent_pole_id: str | None
+    child_pole_id: str | None
     status: SimulatorFaultStatus
     deenergized_pole_ids: tuple[str, ...]
     injected_at: datetime

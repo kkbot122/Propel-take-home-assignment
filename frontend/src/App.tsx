@@ -16,7 +16,7 @@ type TicketCommand =
   | { action: 'resolve'; ticketId: string }
 
 type SimulatorCommand =
-  | { action: 'inject' }
+  | { action: 'inject'; faultType: SimulatedFault['fault_type'] }
   | { action: 'repair'; faultId: string }
   | { action: 'reset' }
 
@@ -65,14 +65,20 @@ export function App() {
     retry: 1,
   })
   const polesQuery = useQuery({
-    queryKey: ['network', 'poles', 'DT-001'],
+    queryKey: ['network', 'poles', 'FDR-001'],
     queryFn: api.poles,
     refetchInterval: POLL_INTERVAL_MS,
     retry: 1,
   })
   const topologyQuery = useQuery({
-    queryKey: ['network', 'topology', 'DT-001'],
-    queryFn: api.topology,
+    queryKey: ['network', 'topology', 'FDR-001'],
+    queryFn: api.topologies,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: 1,
+  })
+  const networkOverviewQuery = useQuery({
+    queryKey: ['network', 'overview', 'FDR-001'],
+    queryFn: api.networkOverview,
     staleTime: Number.POSITIVE_INFINITY,
     retry: 1,
   })
@@ -133,7 +139,7 @@ export function App() {
 
   const simulatorMutation = useMutation<SimulatorResult, Error, SimulatorCommand>({
     mutationFn: (command: SimulatorCommand) => {
-      if (command.action === 'inject') return api.injectFault()
+      if (command.action === 'inject') return api.injectFault(command.faultType)
       if (command.action === 'repair') return api.repairFault(command.faultId)
       return api.resetSimulator()
     },
@@ -144,7 +150,9 @@ export function App() {
       if (command.action === 'inject' && 'fault_id' in result) {
         setActiveFaultId(result.fault_id)
         sessionStorage.setItem(ACTIVE_FAULT_STORAGE_KEY, result.fault_id)
-        setCommandMessage('Fault injected. Waiting for telemetry correlation and localization.')
+        setCommandMessage(
+          `${result.fault_type.replaceAll('_', ' ')} injected. Waiting for telemetry correlation and localization.`,
+        )
       } else if (command.action === 'repair') {
         setActiveFaultId(null)
         sessionStorage.removeItem(ACTIVE_FAULT_STORAGE_KEY)
@@ -162,6 +170,7 @@ export function App() {
     incidentsQuery.dataUpdatedAt,
     suppressedIncidentsQuery.dataUpdatedAt,
     polesQuery.dataUpdatedAt,
+    networkOverviewQuery.dataUpdatedAt,
     incidentQuery.dataUpdatedAt,
     ticketQuery.dataUpdatedAt,
   )
@@ -171,6 +180,7 @@ export function App() {
     suppressedIncidentsQuery.error,
     polesQuery.error,
     topologyQuery.error,
+    networkOverviewQuery.error,
     incidentQuery.error,
     ticketQuery.error,
   )
@@ -216,8 +226,8 @@ export function App() {
           <span className="scenario-index">01</span>
           <div>
             <p className="section-label">Fixed demonstration</p>
-            <h2 id="scenario-title">DT-001 · surveyed span fault</h2>
-            <p>P-001 → P-002 · JP Nagar · PIN 560078</p>
+            <h2 id="scenario-title">FDR-001 · classified outage scenarios</h2>
+            <p>Surveyed span, transformer-wide, and feeder-wide telemetry · PIN 560078</p>
           </div>
         </div>
         <div className="scenario-actions">
@@ -226,12 +236,34 @@ export function App() {
             className="inject-button"
             onClick={() => {
               setSelectedIncidentId(null)
-              simulatorMutation.mutate({ action: 'inject' })
+              simulatorMutation.mutate({ action: 'inject', faultType: 'SPAN_FAULT' })
             }}
             disabled={operationPending || activeFaultId !== null || activeIncidents.length > 0}
           >
             <span aria-hidden="true">⚡</span>
-            Inject fixed fault
+            Inject span fault
+          </button>
+          <button
+            type="button"
+            className="inject-button"
+            onClick={() => {
+              setSelectedIncidentId(null)
+              simulatorMutation.mutate({ action: 'inject', faultType: 'DT_FAULT' })
+            }}
+            disabled={operationPending || activeFaultId !== null || activeIncidents.length > 0}
+          >
+            Inject DT fault
+          </button>
+          <button
+            type="button"
+            className="inject-button"
+            onClick={() => {
+              setSelectedIncidentId(null)
+              simulatorMutation.mutate({ action: 'inject', faultType: 'FEEDER_FAULT' })
+            }}
+            disabled={operationPending || activeFaultId !== null || activeIncidents.length > 0}
+          >
+            Inject feeder fault
           </button>
           <button
             type="button"
@@ -277,14 +309,15 @@ export function App() {
         <section className="panel map-panel" aria-labelledby="map-title">
           <div className="panel-heading map-heading">
             <div>
-              <p className="section-label">Surveyed network · topology v{topologyQuery.data?.topology_version ?? '—'}</p>
-              <h2 id="map-title">DT-001 network</h2>
+              <p className="section-label">Surveyed network · two topology snapshots</p>
+              <h2 id="map-title">FDR-001 network</h2>
             </div>
             <span className="map-focus-label">
               {selectedIncident ? `Focused · ${selectedIncident.suspected_asset_id.replace('->', ' → ')}` : 'Network overview'}
             </span>
           </div>
-          {polesQuery.isPending && !polesQuery.data ? (
+          {(polesQuery.isPending && !polesQuery.data) ||
+          (networkOverviewQuery.isPending && !networkOverviewQuery.data) ? (
             <div className="map-loading" role="status">
               <span className="spinner" aria-hidden="true" />
               Loading surveyed network…
@@ -292,13 +325,19 @@ export function App() {
           ) : (
             <NetworkMap
               poles={polesQuery.data ?? []}
-              topology={topologyQuery.data}
+              topologies={topologyQuery.data ?? []}
+              overview={networkOverviewQuery.data ?? null}
               selectedIncident={selectedIncident}
             />
           )}
           <div className="map-footer">
-            <span>Surveyed topology only</span>
-            <span>{polesQuery.data?.filter((pole) => pole.state === 'LIVE').length ?? 0}/4 poles live</span>
+            <span>
+              {networkOverviewQuery.data?.transformers.length ?? 0} DTs · surveyed topology
+            </span>
+            <span>
+              {polesQuery.data?.filter((pole) => pole.state === 'LIVE').length ?? 0}/
+              {polesQuery.data?.length ?? 0} poles live
+            </span>
           </div>
         </section>
 
@@ -332,7 +371,7 @@ export function App() {
       </section>
 
       <footer className="app-footer">
-        <span>Propel · PB-01 suppression-aware operator console</span>
+        <span>Propel · PB-02 span, DT, and feeder classification</span>
         <span>Polling every 5 seconds · verification remains telemetry-only</span>
       </footer>
     </main>

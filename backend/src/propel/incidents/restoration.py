@@ -56,8 +56,8 @@ def restoration_decision(
     if not eligible:
         return RestorationDecision(False, REPAIR_NOT_VERIFIED, stable_since=None, **common)
 
-    boundary = next((item for item in evidence if item.is_boundary_child), None)
-    if boundary is None or boundary not in fresh_live:
+    required_roots = tuple(item for item in evidence if item.is_boundary_child)
+    if not required_roots or any(item not in fresh_live for item in required_roots):
         return RestorationDecision(False, REPAIR_NOT_VERIFIED, stable_since=None, **common)
 
     required_live_count = ceil(len(eligible) * threshold)

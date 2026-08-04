@@ -23,7 +23,7 @@ Optimize in this order:
 ## Progress dashboard
 
 - [x] PB-01 — Sensor anomaly and scheduled-outage suppression
-- [ ] PB-02 — DT and feeder fault classification
+- [x] PB-02 — DT and feeder fault classification
 - [ ] PB-03 — Multiple simultaneous surveyed faults
 - [ ] PB-04 — Missing-device corridors and degraded precision
 - [ ] PB-05 — Unknown-topology inference and localization
@@ -133,31 +133,31 @@ and feeder-wide root faults while suppressing contained lower-level candidates.
 
 ### Implementation
 
-- [ ] Define snapshot evidence required for a `DT_FAULT`.
-- [ ] Define correlated evidence required for a `FEEDER_FAULT` across multiple DTs.
-- [ ] Add transformer and feeder candidate value types with stable fingerprints.
-- [ ] Add deterministic DT and feeder classifiers over immutable snapshots.
-- [ ] Implement precedence: feeder suppresses contained DT/span candidates.
-- [ ] Implement precedence: DT suppresses contained span candidates.
-- [ ] Keep independent branches outside the parent candidate unaffected.
-- [ ] Define degraded `UNCONFIRMED_OUTAGE` output when evidence is insufficient.
-- [ ] Persist and group DT/feeder candidates through the existing incident service.
-- [ ] Extend simulator commands for fixed DT and feeder faults through public telemetry.
-- [ ] Extend read APIs and the console for DT- and feeder-level assets.
+- [x] Define snapshot evidence required for a `DT_FAULT`.
+- [x] Define correlated evidence required for a `FEEDER_FAULT` across multiple DTs.
+- [x] Add transformer and feeder candidate value types with stable fingerprints.
+- [x] Add deterministic DT and feeder classifiers over immutable snapshots.
+- [x] Implement precedence: feeder suppresses contained DT/span candidates.
+- [x] Implement precedence: DT suppresses contained span candidates.
+- [x] Keep independent branches outside the parent candidate unaffected.
+- [x] Define degraded `UNCONFIRMED_OUTAGE` output when evidence is insufficient.
+- [x] Persist and group DT/feeder candidates through the existing incident service.
+- [x] Extend simulator commands for fixed DT and feeder faults through public telemetry.
+- [x] Extend read APIs and the console for DT- and feeder-level assets.
 
 ### Required tests
 
-- [ ] All observable poles on one DT dark produce one DT incident.
-- [ ] Correlated losses across DTs on one feeder produce one feeder incident.
-- [ ] A feeder candidate suppresses every contained DT/span candidate.
-- [ ] A DT candidate suppresses every contained span candidate.
-- [ ] A span fault on an unrelated subtree remains independent.
-- [ ] Weak cross-DT timing produces `UNCONFIRMED_OUTAGE`, not a confident feeder fault.
-- [ ] Candidate fingerprints remain idempotent under replay and concurrency.
+- [x] All observable poles on one DT dark produce one DT incident.
+- [x] Correlated losses across DTs on one feeder produce one feeder incident.
+- [x] A feeder candidate suppresses every contained DT/span candidate.
+- [x] A DT candidate suppresses every contained span candidate.
+- [x] A span fault on an unrelated subtree remains independent.
+- [x] Weak cross-DT timing produces `UNCONFIRMED_OUTAGE`, not a confident feeder fault.
+- [x] Candidate fingerprints remain idempotent under replay and concurrency.
 
 ### Exit condition
 
-- [ ] Span, DT, feeder, and unconfirmed classifications obey deterministic
+- [x] Span, DT, feeder, and unconfirmed classifications obey deterministic
       precedence and create one incident per probable root fault.
 
 ---

@@ -11,13 +11,22 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from propel.analysis.models import FaultCandidate
-from propel.domain.enums import DeviceHealthStatus, IncidentStatus, PoleStatus, TicketStatus
+from propel.domain.enums import (
+    DeviceHealthStatus,
+    IncidentStatus,
+    PoleStatus,
+    SuspectedAssetType,
+    TicketStatus,
+)
 from propel.incidents.models import (
     IncidentTicketReference,
     IncidentView,
+    NetworkOverviewView,
     NetworkPoleView,
     NetworkSpanView,
+    NetworkSubstationView,
     NetworkTopologyView,
+    NetworkTransformerView,
     TicketEventView,
     TicketView,
 )
@@ -33,10 +42,12 @@ from propel.infra.database.models import (
     DeviceBinding,
     DeviceHealth,
     DistributionTransformer,
+    Feeder,
     Incident,
     IncidentPole,
     Pole,
     PoleState,
+    Substation,
     Ticket,
     TicketEvent,
     TicketRestorationPole,
@@ -59,6 +70,10 @@ class TicketNotFoundError(Exception):
 
 
 class NetworkTransformerNotFoundError(Exception):
+    pass
+
+
+class NetworkFeederNotFoundError(Exception):
     pass
 
 
@@ -117,6 +132,8 @@ class PostgresIncidentService:
             "topology_version": candidate.topology_version,
             "topology_source": candidate.topology_source.value,
             "confidence_level": candidate.confidence_level,
+            "feeder_id": candidate.feeder_id,
+            "affected_dt_ids": list(candidate.affected_dt_ids),
             "candidate": candidate.evidence.as_dict(),
             "suppression": (
                 candidate.suppression.as_dict() if candidate.suppression is not None else None
@@ -189,7 +206,7 @@ class PostgresIncidentService:
                 select(Pole.id, Pole.pole_id)
                 .join(DistributionTransformer, DistributionTransformer.id == Pole.dt_id)
                 .where(
-                    DistributionTransformer.dt_id == candidate.dt_id,
+                    DistributionTransformer.dt_id.in_(candidate.affected_dt_ids),
                     Pole.pole_id.in_(candidate.affected_pole_ids),
                 )
             )
@@ -432,7 +449,6 @@ class PostgresIncidentService:
         incident = await session.get(Incident, ticket.incident_id)
         if incident is None:
             raise RuntimeError("ticket incident does not exist")
-        boundary_child_id = incident.suspected_asset_id.rpartition("->")[2]
         rows = (
             await session.execute(
                 select(
@@ -452,6 +468,34 @@ class PostgresIncidentService:
                 .order_by(Pole.pole_id)
             )
         ).all()
+        required_pole_ids: set[str]
+        if incident.suspected_asset_type == SuspectedAssetType.SPAN:
+            required_pole_ids = {incident.suspected_asset_id.rpartition("->")[2]}
+        else:
+            incident_pole_ids = tuple(row.id for row in rows)
+            latest_topology = (
+                select(
+                    TopologyEdge.dt_id,
+                    func.max(TopologyEdge.topology_version).label("topology_version"),
+                )
+                .group_by(TopologyEdge.dt_id)
+                .subquery()
+            )
+            required_pole_ids = set(
+                await session.scalars(
+                    select(Pole.pole_id)
+                    .join(TopologyEdge, TopologyEdge.child_pole_id == Pole.id)
+                    .join(
+                        latest_topology,
+                        (latest_topology.c.dt_id == TopologyEdge.dt_id)
+                        & (latest_topology.c.topology_version == TopologyEdge.topology_version),
+                    )
+                    .where(
+                        Pole.id.in_(incident_pole_ids),
+                        TopologyEdge.parent_pole_id.is_(None),
+                    )
+                )
+            )
         eligible_count = 0
         for row in rows:
             eligible = row.device_id is not None and row.health_status == DeviceHealthStatus.HEALTHY
@@ -467,7 +511,7 @@ class PostgresIncidentService:
                     ticket_id=ticket.ticket_id,
                     pole_id=row.id,
                     eligible=eligible,
-                    is_boundary_child=row.pole_id == boundary_child_id,
+                    is_boundary_child=row.pole_id in required_pole_ids,
                     exclusion_reason=exclusion_reason,
                     frozen_at=frozen_at,
                 )
@@ -675,6 +719,64 @@ class PostgresIncidentService:
             )
             for row in rows
         ]
+
+    async def get_network_overview(self, feeder_id: str) -> NetworkOverviewView:
+        try:
+            async with self._session_factory() as session:
+                feeder_row = (
+                    await session.execute(
+                        select(
+                            Feeder.id,
+                            Feeder.feeder_id,
+                            Feeder.name,
+                            Substation.substation_id,
+                            Substation.name.label("substation_name"),
+                            Substation.latitude,
+                            Substation.longitude,
+                            Substation.pin_code,
+                        )
+                        .join(Substation, Substation.id == Feeder.substation_id)
+                        .where(Feeder.feeder_id == feeder_id)
+                    )
+                ).one_or_none()
+                if feeder_row is None:
+                    raise NetworkFeederNotFoundError
+                transformer_rows = (
+                    await session.execute(
+                        select(
+                            DistributionTransformer.dt_id,
+                            DistributionTransformer.name,
+                            DistributionTransformer.latitude,
+                            DistributionTransformer.longitude,
+                            DistributionTransformer.pin_code,
+                        )
+                        .where(DistributionTransformer.feeder_id == feeder_row.id)
+                        .order_by(DistributionTransformer.dt_id)
+                    )
+                ).all()
+        except SQLAlchemyError as error:
+            raise IncidentStoreUnavailableError from error
+        return NetworkOverviewView(
+            feeder_id=feeder_row.feeder_id,
+            name=feeder_row.name,
+            substation=NetworkSubstationView(
+                substation_id=feeder_row.substation_id,
+                name=feeder_row.substation_name,
+                latitude=feeder_row.latitude,
+                longitude=feeder_row.longitude,
+                pin_code=feeder_row.pin_code,
+            ),
+            transformers=tuple(
+                NetworkTransformerView(
+                    dt_id=row.dt_id,
+                    name=row.name,
+                    latitude=row.latitude,
+                    longitude=row.longitude,
+                    pin_code=row.pin_code,
+                )
+                for row in transformer_rows
+            ),
+        )
 
     async def get_network_topology(self, dt_id: str) -> NetworkTopologyView:
         try:

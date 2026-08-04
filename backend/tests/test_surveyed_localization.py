@@ -6,6 +6,7 @@ import pytest
 from propel.analysis.localization import InvalidTopologySnapshotError, localize_known_topology
 from propel.analysis.models import (
     DeviceEvidence,
+    FeederTransformerEvidence,
     NetworkSnapshot,
     PoleEvidence,
     ScheduledOutageWindow,
@@ -87,6 +88,57 @@ def fixed_fault_snapshot(*, reverse: bool = False) -> NetworkSnapshot:
             (PoleStatus.DARK, ONSET_AT + timedelta(seconds=2)),
         ),
         reverse=reverse,
+    )
+
+
+def transformer_evidence(
+    dt_number: int,
+    *,
+    onset_at: datetime,
+    all_dark: bool = True,
+) -> FeederTransformerEvidence:
+    prefix = dt_number * 100
+    first_id = f"P-{prefix + 1:03d}"
+    second_id = f"P-{prefix + 2:03d}"
+    first_state = PoleStatus.DARK if all_dark else PoleStatus.LIVE
+    poles = (
+        replace(pole(prefix + 1, first_state, onset_at), latitude=12.889 + dt_number / 1000),
+        replace(
+            pole(prefix + 2, PoleStatus.DARK, onset_at + timedelta(seconds=1)),
+            latitude=12.8892 + dt_number / 1000,
+        ),
+    )
+    return FeederTransformerEvidence(
+        dt_id=f"DT-{dt_number:03d}",
+        latitude=12.889 + dt_number / 1000,
+        longitude=77.584 + dt_number / 1000,
+        pin_code="560078",
+        topology_version=1,
+        poles=poles,
+        spans=(
+            TopologySpan(None, first_id, TopologySource.SURVEYED, 1.0),
+            TopologySpan(first_id, second_id, TopologySource.SURVEYED, 1.0),
+        ),
+    )
+
+
+def feeder_snapshot(
+    transformers: tuple[FeederTransformerEvidence, ...],
+    *,
+    focal_index: int = 0,
+) -> NetworkSnapshot:
+    focal = transformers[focal_index]
+    return NetworkSnapshot(
+        dt_id=focal.dt_id,
+        feeder_id="FDR-001",
+        dt_latitude=focal.latitude,
+        dt_longitude=focal.longitude,
+        dt_pin_code=focal.pin_code,
+        topology_version=focal.topology_version,
+        analysis_at=ANALYSIS_AT,
+        poles=focal.poles,
+        spans=focal.spans,
+        feeder_transformers=transformers,
     )
 
 
@@ -343,3 +395,64 @@ def test_invalid_surveyed_cycle_is_rejected() -> None:
 
     with pytest.raises(InvalidTopologySnapshotError, match="cycle"):
         localize_known_topology(snapshot)
+
+
+def test_transformer_wide_loss_returns_one_dt_candidate() -> None:
+    transformer = transformer_evidence(1, onset_at=ONSET_AT)
+
+    candidates = localize_known_topology(feeder_snapshot((transformer,)))
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.classification == FaultClass.DT_FAULT
+    assert candidate.suspected_asset_type == SuspectedAssetType.DISTRIBUTION_TRANSFORMER
+    assert candidate.suspected_asset_id == "DT-001"
+    assert candidate.affected_dt_ids == ("DT-001",)
+    assert candidate.precision == LocalizationPrecision.DT_LEVEL
+
+
+def test_correlated_transformer_losses_return_one_feeder_candidate() -> None:
+    transformers = (
+        transformer_evidence(1, onset_at=ONSET_AT),
+        transformer_evidence(2, onset_at=ONSET_AT + timedelta(seconds=3)),
+    )
+
+    candidates = localize_known_topology(feeder_snapshot(transformers))
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.classification == FaultClass.FEEDER_FAULT
+    assert candidate.suspected_asset_type == SuspectedAssetType.FEEDER
+    assert candidate.suspected_asset_id == "FDR-001"
+    assert candidate.affected_dt_ids == ("DT-001", "DT-002")
+    assert candidate.precision == LocalizationPrecision.FEEDER_LEVEL
+
+
+def test_weak_feeder_timing_degrades_to_unconfirmed_outage() -> None:
+    transformers = (
+        transformer_evidence(1, onset_at=ONSET_AT - timedelta(seconds=20)),
+        transformer_evidence(2, onset_at=ONSET_AT),
+    )
+
+    candidate = localize_known_topology(feeder_snapshot(transformers))[0]
+
+    assert candidate.classification == FaultClass.UNCONFIRMED_OUTAGE
+    assert candidate.confidence_level == "LOW"
+    assert candidate.evidence.components.contradiction_penalty == -20
+
+
+def test_feeder_precedence_does_not_suppress_unrelated_span_candidate() -> None:
+    unrelated = transformer_evidence(3, onset_at=ONSET_AT, all_dark=False)
+    transformers = (
+        transformer_evidence(1, onset_at=ONSET_AT),
+        transformer_evidence(2, onset_at=ONSET_AT + timedelta(seconds=2)),
+        unrelated,
+    )
+
+    candidates = localize_known_topology(feeder_snapshot(transformers, focal_index=2))
+
+    assert [candidate.classification for candidate in candidates] == [
+        FaultClass.FEEDER_FAULT,
+        FaultClass.SPAN_FAULT,
+    ]
+    assert candidates[1].suspected_asset_id == "P-301->P-302"
