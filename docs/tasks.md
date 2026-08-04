@@ -1076,73 +1076,73 @@ Build the generator early because every later task depends on realistic test dat
 ## 19.1 Build the application shell
 
 - [ ] Add main navigation.
-- [ ] Add active-incident count.
-- [ ] Add backend-health indicator.
-- [ ] Add loading and error states.
+- [x] Add active-incident count.
+- [x] Add backend-health indicator.
+- [x] Add loading and error states.
 - [ ] Test: console remains usable when one request fails.
 
 ## 19.2 Build incident list
 
 - [ ] Show severity.
-- [ ] Show fault type.
-- [ ] Show suspected asset.
-- [ ] Show affected-pole count.
+- [x] Show fault type.
+- [x] Show suspected asset.
+- [x] Show affected-pole count.
 - [ ] Show PIN code.
-- [ ] Show confidence level.
-- [ ] Show ticket state.
-- [ ] Sort most actionable incidents first.
-- [ ] Test: the list renders seeded and simulated incidents.
+- [x] Show confidence level.
+- [x] Show ticket state.
+- [x] Sort most actionable incidents first.
+- [x] Test: the list renders seeded and simulated incidents.
 
 ## 19.3 Build map view
 
 - [ ] Show DT markers.
-- [ ] Show fault marker.
-- [ ] Show suspected span or corridor.
-- [ ] Show affected poles on selection.
+- [x] Show fault marker.
+- [x] Show suspected span or corridor.
+- [x] Show affected poles on selection.
 - [ ] Visually distinguish exact, probable, corridor, DT-level, and feeder-level results.
-- [ ] Test: map renders without a paid API key.
+- [x] Test: map renders without a paid API key.
 
 ## 19.4 Build incident detail panel
 
-- [ ] Show operator-friendly summary.
+- [x] Show operator-friendly summary.
 - [ ] Show coordinates with copy action.
 - [ ] Show PIN code.
-- [ ] Show affected count.
-- [ ] Show confidence score and level.
-- [ ] Show concise reasons.
-- [ ] Show topology source.
-- [ ] Show ticket history.
+- [x] Show affected count.
+- [x] Show confidence score and level.
+- [x] Show concise reasons.
+- [x] Show topology source.
+- [x] Show ticket history.
 - [ ] Keep raw telemetry in a secondary diagnostics section.
 - [ ] Test: a non-technical user can identify what broke and where from this panel.
 
 ## 19.5 Add ticket actions
 
-- [ ] Acknowledge.
-- [ ] Assign crew.
+- [x] Acknowledge.
+- [x] Assign crew.
 - [ ] Add note.
-- [ ] Mark repair completed.
-- [ ] Disable invalid actions based on current state.
-- [ ] Show repair-not-verified warning.
-- [ ] Test every UI action against the API.
+- [x] Mark repair completed.
+- [x] Disable invalid actions based on current state.
+- [x] Show repair-not-verified warning.
+- [x] Test every UI action against the API.
 
 ## 19.6 Add simulator controls
 
 - [ ] Select fault type.
 - [ ] Select target feeder, DT, or span.
 - [ ] Configure noise options.
-- [ ] Inject fault.
-- [ ] Repair fault.
-- [ ] Reset.
-- [ ] Show simulation progress and actual injected fault for evaluator comparison.
-- [ ] Test: a reviewer can complete the full demo without a terminal.
+- [x] Inject fault.
+- [x] Repair fault.
+- [x] Reset.
+- [x] Show simulation progress and actual injected fault for evaluator comparison.
+- [x] Test: a reviewer can complete the full demo without a terminal.
 
 ## 19.7 Add near-real-time refresh
 
-- [ ] Start with polling every 5–10 seconds.
-- [ ] Pause or back off when the tab is hidden.
-- [ ] Show last refreshed time.
-- [ ] Avoid duplicate UI notifications.
-- [ ] Test: a new simulated incident appears without manual refresh.
+- [x] Start with polling every 5–10 seconds.
+- [x] Pause or back off when the tab is hidden.
+- [x] Show last refreshed time.
+- [x] Avoid duplicate UI notifications.
+- [x] Test: a new simulated incident appears without manual refresh.
 
 ---
 

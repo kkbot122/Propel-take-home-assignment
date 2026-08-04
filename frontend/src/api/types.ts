@@ -1,0 +1,108 @@
+export type TicketStatus =
+  | 'DETECTED'
+  | 'ACKNOWLEDGED'
+  | 'CREW_ASSIGNED'
+  | 'RESOLVED'
+  | 'VERIFIED'
+  | 'CLOSED'
+
+export type PoleStatus = 'LIVE' | 'DARK' | 'STALE' | 'UNKNOWN' | 'NO_DEVICE'
+
+export interface Incident {
+  incident_id: string
+  fingerprint: string
+  status: 'ACTIVE' | 'RESOLVED' | 'SUPPRESSED'
+  classification: string
+  suspected_asset_type: string
+  suspected_asset_id: string
+  latitude: number
+  longitude: number
+  pin_code: string | null
+  affected_pole_count: number
+  affected_pole_ids: string[]
+  precision: string
+  confidence_score: number
+  confidence_reason: string
+  evidence: Record<string, unknown>
+  detected_at: string
+  updated_at: string
+  resolved_at: string | null
+  ticket_id: string | null
+  ticket_status: TicketStatus | null
+  assigned_crew: string | null
+}
+
+export interface TicketEvent {
+  from_status: TicketStatus | null
+  to_status: TicketStatus
+  actor: string
+  reason: string | null
+  occurred_at: string
+  details: Record<string, unknown>
+}
+
+export interface Ticket {
+  ticket_id: string
+  incident_id: string
+  status: TicketStatus
+  assigned_crew: string | null
+  created_at: string
+  updated_at: string
+  resolution_claimed_at: string | null
+  verified_at: string | null
+  closed_at: string | null
+  restoration_status: string | null
+  remaining_dark_count: number | null
+  events: TicketEvent[]
+}
+
+export interface NetworkPole {
+  pole_id: string
+  dt_id: string
+  latitude: number
+  longitude: number
+  pin_code: string
+  state: PoleStatus
+  state_received_at: string | null
+  device_id: string | null
+}
+
+export interface NetworkSpan {
+  parent_pole_id: string | null
+  child_pole_id: string
+  source: 'SURVEYED' | 'INFERRED'
+  edge_confidence: number
+}
+
+export interface NetworkTopology {
+  dt_id: string
+  topology_version: number
+  spans: NetworkSpan[]
+}
+
+export interface SimulatedFault {
+  fault_id: string
+  dt_id: string
+  parent_pole_id: string
+  child_pole_id: string
+  status: 'ACTIVE' | 'REPAIRED'
+  deenergized_pole_ids: string[]
+  injected_at: string
+  injection_telemetry_at: string | null
+  repaired_at: string | null
+  emitted_event_ids: string[]
+}
+
+export interface HealthResponse {
+  status: 'healthy' | 'unhealthy'
+  service: string
+  dependencies: Record<string, { status: string }>
+}
+
+export interface ApiErrorBody {
+  error?: {
+    code?: string
+    message?: string
+    retryable?: boolean
+  }
+}

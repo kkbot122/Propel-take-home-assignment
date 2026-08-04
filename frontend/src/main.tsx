@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
 import './styles.css'
+import 'leaflet/dist/leaflet.css'
 
 const queryClient = new QueryClient()
 const rootElement = document.getElementById('root')
@@ -19,4 +20,3 @@ createRoot(rootElement).render(
     </QueryClientProvider>
   </StrictMode>,
 )
-

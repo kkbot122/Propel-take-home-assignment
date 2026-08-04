@@ -1,34 +1,328 @@
-const architecture = ['FastAPI', 'Redis Streams', 'PostgreSQL', 'React']
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+
+import { api, errorMessage } from './api/client'
+import type { Incident, SimulatedFault, Ticket } from './api/types'
+import { IncidentDetail } from './components/IncidentDetail'
+import { IncidentList } from './components/IncidentList'
+import { NetworkMap } from './components/NetworkMap'
+
+const POLL_INTERVAL_MS = 5_000
+const ACTIVE_FAULT_STORAGE_KEY = 'propel-active-simulator-fault'
+
+type TicketCommand =
+  | { action: 'acknowledge'; ticketId: string }
+  | { action: 'assign'; ticketId: string; crew: string }
+  | { action: 'resolve'; ticketId: string }
+
+type SimulatorCommand =
+  | { action: 'inject' }
+  | { action: 'repair'; faultId: string }
+  | { action: 'reset' }
+
+type SimulatorResult =
+  | SimulatedFault
+  | { status: 'reset'; repaired_faults: SimulatedFault[] }
+
+function queryError(...errors: unknown[]): string | null {
+  const error = errors.find((item) => item !== null && item !== undefined)
+  return error ? errorMessage(error) : null
+}
+
+function lastRefreshLabel(timestamp: number): string {
+  if (timestamp === 0) return 'Waiting for first response'
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(timestamp))
+}
 
 export function App() {
+  const queryClient = useQueryClient()
+  const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null)
+  const [activeFaultId, setActiveFaultId] = useState<string | null>(() =>
+    sessionStorage.getItem(ACTIVE_FAULT_STORAGE_KEY),
+  )
+  const [commandMessage, setCommandMessage] = useState<string | null>(null)
+
+  const healthQuery = useQuery({
+    queryKey: ['health'],
+    queryFn: api.health,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
+  const incidentsQuery = useQuery({
+    queryKey: ['incidents', 'active'],
+    queryFn: api.incidents,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
+  const polesQuery = useQuery({
+    queryKey: ['network', 'poles', 'DT-001'],
+    queryFn: api.poles,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
+  const topologyQuery = useQuery({
+    queryKey: ['network', 'topology', 'DT-001'],
+    queryFn: api.topology,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: 1,
+  })
+  const incidents = useMemo(() => incidentsQuery.data ?? [], [incidentsQuery.data])
+  const effectiveSelectedIncidentId = selectedIncidentId ?? incidents[0]?.incident_id ?? null
+  const incidentQuery = useQuery({
+    queryKey: ['incident', effectiveSelectedIncidentId],
+    queryFn: () => api.incident(effectiveSelectedIncidentId as string),
+    enabled: effectiveSelectedIncidentId !== null,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
+
+  const selectedSummary = useMemo(
+    () =>
+      incidents.find((incident) => incident.incident_id === effectiveSelectedIncidentId) ?? null,
+    [effectiveSelectedIncidentId, incidents],
+  )
+  const selectedIncident: Incident | null = incidentQuery.data ?? selectedSummary
+  const selectedTicketId = selectedIncident?.ticket_id ?? null
+  const ticketQuery = useQuery({
+    queryKey: ['ticket', selectedTicketId],
+    queryFn: () => api.ticket(selectedTicketId as string),
+    enabled: selectedTicketId !== null,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
+  const ticket: Ticket | null = ticketQuery.data ?? null
+
+  async function refreshOperationalData() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['incidents'] }),
+      queryClient.invalidateQueries({ queryKey: ['incident'] }),
+      queryClient.invalidateQueries({ queryKey: ['ticket'] }),
+      queryClient.invalidateQueries({ queryKey: ['network', 'poles'] }),
+    ])
+  }
+
+  const ticketMutation = useMutation({
+    mutationFn: (command: TicketCommand) => {
+      if (command.action === 'acknowledge') return api.acknowledge(command.ticketId)
+      if (command.action === 'assign') return api.assign(command.ticketId, command.crew)
+      return api.resolve(command.ticketId)
+    },
+    onMutate: () => {
+      setCommandMessage(null)
+    },
+    onSuccess: (updatedTicket) => {
+      queryClient.setQueryData(['ticket', updatedTicket.ticket_id], updatedTicket)
+      setCommandMessage(`Ticket moved to ${updatedTicket.status.replaceAll('_', ' ')}.`)
+      void refreshOperationalData()
+    },
+  })
+
+  const simulatorMutation = useMutation<SimulatorResult, Error, SimulatorCommand>({
+    mutationFn: (command: SimulatorCommand) => {
+      if (command.action === 'inject') return api.injectFault()
+      if (command.action === 'repair') return api.repairFault(command.faultId)
+      return api.resetSimulator()
+    },
+    onMutate: () => {
+      setCommandMessage(null)
+    },
+    onSuccess: (result, command) => {
+      if (command.action === 'inject' && 'fault_id' in result) {
+        setActiveFaultId(result.fault_id)
+        sessionStorage.setItem(ACTIVE_FAULT_STORAGE_KEY, result.fault_id)
+        setCommandMessage('Fault injected. Waiting for telemetry correlation and localization.')
+      } else if (command.action === 'repair') {
+        setActiveFaultId(null)
+        sessionStorage.removeItem(ACTIVE_FAULT_STORAGE_KEY)
+        setCommandMessage('Repair telemetry sent. Waiting for the 10-second verification window.')
+      } else {
+        setActiveFaultId(null)
+        sessionStorage.removeItem(ACTIVE_FAULT_STORAGE_KEY)
+        setCommandMessage('Simulator reset requested. Active faults are restoring through telemetry.')
+      }
+      void refreshOperationalData()
+    },
+  })
+
+  const lastUpdatedAt = Math.max(
+    incidentsQuery.dataUpdatedAt,
+    polesQuery.dataUpdatedAt,
+    incidentQuery.dataUpdatedAt,
+    ticketQuery.dataUpdatedAt,
+  )
+  const backendError = queryError(
+    healthQuery.error,
+    incidentsQuery.error,
+    polesQuery.error,
+    topologyQuery.error,
+    incidentQuery.error,
+    ticketQuery.error,
+  )
+  const mutationError = queryError(ticketMutation.error, simulatorMutation.error)
+  const backendHealthy = healthQuery.data?.status === 'healthy' && backendError === null
+  const ticketStatus = ticket?.status ?? selectedIncident?.ticket_status
+  const operationPending = ticketMutation.isPending || simulatorMutation.isPending
+
   return (
     <main className="app-shell">
-      <section className="hero" aria-labelledby="page-title">
-        <p className="eyebrow">Outage localization system</p>
-        <h1 id="page-title">Propel operator console</h1>
-        <p className="summary">
-          The foundation is online. The first vertical slice will turn surveyed-network
-          telemetry into one localized incident and a telemetry-verified ticket.
-        </p>
-
-        <dl className="status-grid" aria-label="Foundation status">
-          <div>
-            <dt>Current milestone</dt>
-            <dd>VS-01 · Foundation</dd>
+      <header className="app-header">
+        <div className="brand-lockup">
+          <div className="brand-mark" aria-hidden="true">
+            P
           </div>
           <div>
-            <dt>System state</dt>
-            <dd className="healthy"><span aria-hidden="true" />Ready to build</dd>
+            <p>Distribution operations</p>
+            <h1>Propel</h1>
           </div>
-        </dl>
+        </div>
 
-        <ul className="stack" aria-label="Application stack">
-          {architecture.map((technology) => (
-            <li key={technology}>{technology}</li>
-          ))}
-        </ul>
+        <div className="header-status" aria-live="polite">
+          <span className={`health-indicator${backendHealthy ? ' online' : ' offline'}`}>
+            <span aria-hidden="true" />
+            {backendHealthy ? 'System online' : 'System degraded'}
+          </span>
+          <span className="refresh-time">Last refresh · {lastRefreshLabel(lastUpdatedAt)}</span>
+        </div>
+      </header>
+
+      {(backendError || healthQuery.data?.status === 'unhealthy') && (
+        <div className="failure-banner" role="alert">
+          <strong>Live backend data is unavailable.</strong>
+          <span>{backendError ?? 'One or more backend dependencies are unhealthy.'}</span>
+          <button type="button" onClick={() => void queryClient.refetchQueries()}>
+            Retry now
+          </button>
+        </div>
+      )}
+
+      <section className="scenario-bar" aria-labelledby="scenario-title">
+        <div className="scenario-copy">
+          <span className="scenario-index">01</span>
+          <div>
+            <p className="section-label">Fixed demonstration</p>
+            <h2 id="scenario-title">DT-001 · surveyed span fault</h2>
+            <p>P-001 → P-002 · JP Nagar · PIN 560078</p>
+          </div>
+        </div>
+        <div className="scenario-actions">
+          <button
+            type="button"
+            className="inject-button"
+            onClick={() => {
+              setSelectedIncidentId(null)
+              simulatorMutation.mutate({ action: 'inject' })
+            }}
+            disabled={operationPending || activeFaultId !== null || incidents.length > 0}
+          >
+            <span aria-hidden="true">⚡</span>
+            Inject fixed fault
+          </button>
+          <button
+            type="button"
+            className="repair-button"
+            onClick={() => {
+              if (activeFaultId) {
+                setSelectedIncidentId(selectedIncident?.incident_id ?? null)
+                simulatorMutation.mutate({ action: 'repair', faultId: activeFaultId })
+              }
+            }}
+            disabled={operationPending || activeFaultId === null || ticketStatus !== 'RESOLVED'}
+          >
+            Send repair telemetry
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => {
+              setSelectedIncidentId(null)
+              simulatorMutation.mutate({ action: 'reset' })
+            }}
+            disabled={operationPending}
+          >
+            Reset simulation
+          </button>
+        </div>
       </section>
+
+      {(commandMessage || mutationError) && (
+        <div className={`command-message${mutationError ? ' error' : ''}`} role="status">
+          {mutationError ?? commandMessage}
+        </div>
+      )}
+
+      <section className="workspace" aria-label="Outage operations workspace">
+        <IncidentList
+          incidents={incidents}
+          selectedIncidentId={effectiveSelectedIncidentId}
+          onSelect={setSelectedIncidentId}
+          loading={incidentsQuery.isPending}
+        />
+
+        <section className="panel map-panel" aria-labelledby="map-title">
+          <div className="panel-heading map-heading">
+            <div>
+              <p className="section-label">Surveyed network · topology v{topologyQuery.data?.topology_version ?? '—'}</p>
+              <h2 id="map-title">DT-001 network</h2>
+            </div>
+            <span className="map-focus-label">
+              {selectedIncident ? `Focused · ${selectedIncident.suspected_asset_id.replace('->', ' → ')}` : 'Network overview'}
+            </span>
+          </div>
+          {polesQuery.isPending && !polesQuery.data ? (
+            <div className="map-loading" role="status">
+              <span className="spinner" aria-hidden="true" />
+              Loading surveyed network…
+            </div>
+          ) : (
+            <NetworkMap
+              poles={polesQuery.data ?? []}
+              topology={topologyQuery.data}
+              selectedIncident={selectedIncident}
+            />
+          )}
+          <div className="map-footer">
+            <span>Surveyed topology only</span>
+            <span>{polesQuery.data?.filter((pole) => pole.state === 'LIVE').length ?? 0}/4 poles live</span>
+          </div>
+        </section>
+
+        <IncidentDetail
+          incident={selectedIncident}
+          ticket={ticket}
+          loading={
+            effectiveSelectedIncidentId !== null &&
+            (incidentQuery.isPending || (selectedTicketId !== null && ticketQuery.isPending))
+          }
+          actionPending={ticketMutation.isPending}
+          onAcknowledge={() => {
+            if (selectedTicketId) {
+              setSelectedIncidentId(selectedIncident?.incident_id ?? null)
+              ticketMutation.mutate({ action: 'acknowledge', ticketId: selectedTicketId })
+            }
+          }}
+          onAssign={(crew) => {
+            if (selectedTicketId) {
+              setSelectedIncidentId(selectedIncident?.incident_id ?? null)
+              ticketMutation.mutate({ action: 'assign', ticketId: selectedTicketId, crew })
+            }
+          }}
+          onResolve={() => {
+            if (selectedTicketId) {
+              setSelectedIncidentId(selectedIncident?.incident_id ?? null)
+              ticketMutation.mutate({ action: 'resolve', ticketId: selectedTicketId })
+            }
+          }}
+        />
+      </section>
+
+      <footer className="app-footer">
+        <span>Propel backbone · VS-08 operator console</span>
+        <span>Polling every 5 seconds · verification remains telemetry-only</span>
+      </footer>
     </main>
   )
 }
-

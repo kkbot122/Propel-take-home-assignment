@@ -117,6 +117,10 @@ The backend is a Python 3.13 modular monolith built with FastAPI, Pydantic v2, S
 
 The operator console is a React 19 and TypeScript single-page application built with Vite. TanStack Query owns server state and polls every five seconds. React Leaflet renders the network and incidents over a configurable OpenStreetMap tile layer. Polling is intentionally preferred to WebSockets for the MVP because it is operationally simpler and comfortably inside the 120-second product target.
 
+The first screen is an operator workspace with an active-incident queue, a surveyed-network map, and a selected-incident detail panel. Selection is one UI concern shared by the three views; incident, ticket, pole-state, and topology payloads remain query-managed server state. The console retains the ticket being worked after automatic closure so the operator can see the separate `VERIFIED` and `CLOSED` audit events, then switches back to the next active incident when a new scenario starts. Simulator controls call only the development simulator API; they never write derived state directly.
+
+Only the transition valid for the current ticket state is rendered. `RESOLVED` is presented as repair claimed but not verified until fresh telemetry closes the ticket. Query failures make the system-health indicator degraded and display a retryable failure banner rather than silently presenting cached values as current. The built image receives `VITE_OSM_TILE_URL` as a Compose build argument, while OpenStreetMap attribution stays visible regardless of tile endpoint.
+
 PostgreSQL 17 is the only persistent source of truth. Redis 7.4 Streams buffers telemetry and a Redis sorted set debounces DT analysis. Docker Compose is the local runtime. The public deployment target is Railway using the same repository Dockerfiles and private service networking.
 
 The logical boxes above are not independent microservices. The long-lived deployment units are:

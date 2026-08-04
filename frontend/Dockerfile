@@ -13,6 +13,9 @@ RUN pnpm install --frozen-lockfile
 COPY index.html vite.config.ts vitest.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json ./
 COPY src ./src
 
+ARG VITE_OSM_TILE_URL=https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png
+ENV VITE_OSM_TILE_URL=$VITE_OSM_TILE_URL
+
 RUN pnpm build
 
 FROM nginx:1.28-alpine

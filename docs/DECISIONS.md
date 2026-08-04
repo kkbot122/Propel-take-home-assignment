@@ -2,6 +2,16 @@
 
 Decisions are listed newest first. Dates use `YYYY-MM-DD`.
 
+## 2026-08-04 — Keep the operator console polled, state-driven, and read-model-only
+
+**Chosen:** TanStack Query owns incident, ticket, pole-state, topology, and health responses. Active operational data polls every five seconds using the browser-aware default that pauses background refetching. One selected incident synchronizes the queue, surveyed React Leaflet map, evidence panel, and ticket workflow. The selected ticket remains visible after automatic closure so separate `VERIFIED` and `CLOSED` events are observable even after the incident leaves the active queue.
+
+The UI renders only the next valid operator transition and never offers manual verification or closure. Simulator buttons call the existing fixed-scenario API and wait for the normal telemetry path. API failures visibly degrade system health while cached values are treated as stale context, not proof that the backend remains healthy. A configurable OpenStreetMap tile URL is compiled into the Vite image and attribution is always rendered.
+
+**Reason:** Five-second polling is comfortably inside the product target, keeps deployment and recovery simple, and lets PostgreSQL-backed HTTP read models remain authoritative. Keeping workflow rules on the backend while hiding invalid controls gives operators a clear path without making the frontend a second domain engine.
+
+**Rejected:** WebSockets for the backbone slice, duplicating query responses in a global store, frontend-side classification or confidence logic, manual verify/close controls, and a credentialed map provider for the evaluator path.
+
 ## 2026-08-04 — Deduplicate active incidents and audit ticket transitions in PostgreSQL
 
 **Chosen:** Fingerprint a surveyed span candidate by DT and directed boundary,
@@ -116,7 +126,7 @@ infra      database, Redis, configuration, logging, and health checks
 - TanStack Query for API state and 5-second polling
 - React Leaflet and Leaflet for the map
 - OpenStreetMap raster tiles for the evaluator demo, with visible attribution and a configurable tile URL
-- Tailwind CSS for the small operator-console design system
+- Purpose-built CSS tokens and responsive layout rules for the small operator-console design system
 - Vitest and React Testing Library for component tests
 - Playwright for one critical simulator-to-ticket smoke test
 

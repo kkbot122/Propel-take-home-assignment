@@ -60,7 +60,7 @@ After the operator moves the ticket through `ACKNOWLEDGED`, `CREW_ASSIGNED`, and
 - [x] VS-05 — Surveyed-tree span localization
 - [x] VS-06 — Incident grouping and ticket workflow
 - [x] VS-07 — Fault injection, repair, and restoration verification
-- [ ] VS-08 — Minimal operator console
+- [x] VS-08 — Minimal operator console
 - [ ] VS-09 — End-to-end test and backbone acceptance
 
 ---
@@ -385,16 +385,16 @@ def localize_known_topology(snapshot: NetworkSnapshot) -> list[FaultCandidate]:
 
 ### First screen
 
-- [ ] Display active incidents ordered by detection time.
-- [ ] Show fault class, ticket status, affected count, suspected span, precision, and confidence.
-- [ ] Display the seeded network and incident location on a Leaflet map.
-- [ ] Keep required OpenStreetMap attribution visible.
-- [ ] Selecting an incident synchronizes the list, detail panel, and map.
-- [ ] Show positive and negative evidence in plain language.
-- [ ] Add acknowledge, assign, and repair-claimed ticket actions only when valid.
-- [ ] Add fixed-scenario inject, repair, and reset simulator controls.
-- [ ] Poll incident data every five seconds.
-- [ ] Show last refresh time and API failure state.
+- [x] Display active incidents ordered by detection time.
+- [x] Show fault class, ticket status, affected count, suspected span, precision, and confidence.
+- [x] Display the seeded network and incident location on a Leaflet map.
+- [x] Keep required OpenStreetMap attribution visible.
+- [x] Selecting an incident synchronizes the list, detail panel, and map.
+- [x] Show positive and negative evidence in plain language.
+- [x] Add acknowledge, assign, and repair-claimed ticket actions only when valid.
+- [x] Add fixed-scenario inject, repair, and reset simulator controls.
+- [x] Poll incident data every five seconds.
+- [x] Show last refresh time and API failure state.
 
 ### Deliberately excluded from this slice
 
@@ -409,14 +409,14 @@ def localize_known_topology(snapshot: NetworkSnapshot) -> list[FaultCandidate]:
 
 ### Verification
 
-- [ ] A reviewer can complete the entire scenario without a terminal after startup.
-- [ ] A new incident appears without manually refreshing the page.
-- [ ] Invalid ticket actions are unavailable and rejected by the API.
-- [ ] Backend failure is visible rather than presenting stale data as healthy.
+- [x] A reviewer can complete the entire scenario without a terminal after startup.
+- [x] A new incident appears without manually refreshing the page.
+- [x] Invalid ticket actions are unavailable and rejected by the API.
+- [x] Backend failure is visible rather than presenting stale data as healthy.
 
 ### Exit condition
 
-- [ ] The operator console exposes the whole backbone workflow clearly enough for the five-minute demo.
+- [x] The operator console exposes the whole backbone workflow clearly enough for the five-minute demo.
 
 ---
 
