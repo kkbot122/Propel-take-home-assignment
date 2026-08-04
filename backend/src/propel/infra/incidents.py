@@ -119,7 +119,7 @@ class PostgresIncidentService:
                 ]
         except SQLAlchemyError as error:
             raise IncidentStoreUnavailableError from error
-        for reference in references:
+        for candidate, reference in zip(ordered_candidates, references, strict=True):
             logger.info(
                 json.dumps(
                     {
@@ -129,6 +129,8 @@ class PostgresIncidentService:
                             str(reference.ticket_id) if reference.ticket_id is not None else None
                         ),
                         "fingerprint": reference.fingerprint,
+                        "feeder_id": candidate.feeder_id,
+                        "dt_id": candidate.dt_id,
                     }
                 )
             )

@@ -460,32 +460,32 @@ public deployment without moving domain decisions into the UI.
 
 ### Observability and diagnostics
 
-- [ ] Standardize structured log fields for correlation, device, pole, DT,
+- [x] Standardize structured log fields for correlation, device, pole, DT,
       feeder, incident, and ticket identifiers.
-- [ ] Expose bounded telemetry history and device-health diagnostics.
-- [ ] Surface database, Redis, worker lag, analysis retry, and dead-letter health.
-- [ ] Add operator views for suppressed events, topology provenance, corridor
+- [x] Expose bounded telemetry history and device-health diagnostics.
+- [x] Surface database, Redis, worker lag, analysis retry, and dead-letter health.
+- [x] Add operator views for suppressed events, topology provenance, corridor
       bounds, confidence components, and restoration evidence.
-- [ ] Distinguish loading, empty, stale, degraded, suppressed, and error states.
-- [ ] Keep raw telemetry secondary to the operator decision.
-- [ ] Add filters needed for multiple active incidents without adding analytics scope.
+- [x] Distinguish loading, empty, stale, degraded, suppressed, and error states.
+- [x] Keep raw telemetry secondary to the operator decision.
+- [x] Add filters needed for multiple active incidents without adding analytics scope.
 
 ### Security and deployment
 
-- [ ] Keep simulator controls disabled or protected in the production design.
-- [ ] Validate security headers, request limits, CORS/proxy behavior, and secret handling.
-- [ ] Document every deployment environment variable and safe default.
-- [ ] Add Railway service configuration for frontend, API, worker, PostgreSQL, and Redis.
-- [ ] Run migrations and deterministic initialization safely during deployment.
-- [ ] Add deployment health checks and rollback/recovery instructions.
-- [ ] Preserve configurable tiles and OpenStreetMap attribution publicly.
+- [x] Keep simulator controls disabled or protected in the production design.
+- [x] Validate security headers, request limits, CORS/proxy behavior, and secret handling.
+- [x] Document every deployment environment variable and safe default.
+- [x] Add Railway service configuration for frontend, API, worker, PostgreSQL, and Redis.
+- [x] Run migrations and deterministic initialization safely during deployment.
+- [x] Add deployment health checks and rollback/recovery instructions.
+- [x] Preserve configurable tiles and OpenStreetMap attribution publicly.
 - [ ] Run the acceptance smoke test against the deployed URL.
 
 ### Required tests
 
-- [ ] A dependency failure is visible in logs, health, and the console.
-- [ ] Diagnostic endpoints enforce pagination and bounded responses.
-- [ ] No secrets or unbounded telemetry payloads appear in logs.
+- [x] A dependency failure is visible in logs, health, and the console.
+- [x] Diagnostic endpoints enforce pagination and bounded responses.
+- [x] No secrets or unbounded telemetry payloads appear in logs.
 - [ ] The public deployment starts from empty managed data services.
 - [ ] The deployed operator workflow reaches telemetry-verified closure.
 

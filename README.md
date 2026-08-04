@@ -87,6 +87,7 @@ Default entry points:
 * Operator console: `http://localhost:3000`
 * Backend health check: `http://localhost:8000/health`
 * API documentation: `http://localhost:8000/docs`
+* Operational diagnostics: `http://localhost:3000/api/diagnostics/overview`
 
 The startup waits for PostgreSQL and Redis, runs the one-shot initializer, and
 then starts the API, telemetry worker, and Nginx-served frontend. Stop the stack
@@ -174,6 +175,18 @@ provides:
 * `POST /api/tickets/{ticket_id}/acknowledge`
 * `POST /api/tickets/{ticket_id}/assign`
 * `POST /api/tickets/{ticket_id}/resolve`
+
+PB-09 diagnostics are read-only and bounded:
+
+* `GET /api/diagnostics/overview`
+* `GET /api/diagnostics/telemetry?limit=25&cursor=...`
+* `GET /api/diagnostics/devices?status=STALE&limit=25&cursor=...`
+
+The overview separates API dependency health from worker freshness, consumer
+lag, analysis retries, and dead letters. History pages are capped at 100 items
+and never expose stored raw payloads. See
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for Railway configuration, production
+safeguards, health checks, and recovery.
 
 Operator transitions require an `actor`; assignment also requires
 `assigned_crew`. Every accepted transition is appended to `ticket_events`.

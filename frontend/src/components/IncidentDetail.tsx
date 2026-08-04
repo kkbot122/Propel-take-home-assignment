@@ -65,6 +65,54 @@ function inferredTopologyEvidence(incident: Incident | null): {
   }
 }
 
+interface ConfidenceEvidence {
+  policyVersion: string | null
+  rawScore: number | null
+  components: [string, number][]
+  penalties: [string, number][]
+  caps: { maximum: number; reason: string }[]
+}
+
+function confidenceEvidence(incident: Incident | null): ConfidenceEvidence | null {
+  if (!incident) return null
+  const candidate = incident.evidence.candidate
+  if (!isRecord(candidate)) return null
+  const components = isRecord(candidate.components)
+    ? Object.entries(candidate.components).filter(
+        (entry): entry is [string, number] => typeof entry[1] === 'number',
+      )
+    : []
+  const penalties = isRecord(candidate.penalties)
+    ? Object.entries(candidate.penalties).filter(
+        (entry): entry is [string, number] => typeof entry[1] === 'number',
+      )
+    : []
+  const caps = Array.isArray(candidate.caps)
+    ? candidate.caps.flatMap((cap) =>
+        isRecord(cap) && typeof cap.maximum === 'number' && typeof cap.reason === 'string'
+          ? [{ maximum: cap.maximum, reason: cap.reason }]
+          : [],
+      )
+    : []
+  if (components.length === 0 && penalties.length === 0 && caps.length === 0) return null
+  return {
+    policyVersion:
+      typeof candidate.score_policy_version === 'string' ? candidate.score_policy_version : null,
+    rawScore: typeof candidate.raw_score === 'number' ? candidate.raw_score : null,
+    components,
+    penalties,
+    caps,
+  }
+}
+
+function restorationEvidence(ticket: Ticket | null): Record<string, unknown> | null {
+  if (!ticket) return null
+  const event = [...ticket.events]
+    .reverse()
+    .find((item) => item.to_status === 'VERIFIED' || item.to_status === 'CLOSED')
+  return event && Object.keys(event.details).length > 0 ? event.details : null
+}
+
 function statusLabel(status: TicketStatus): string {
   return status.replaceAll('_', ' ')
 }
@@ -90,6 +138,8 @@ export function IncidentDetail({
   const reasons = evidenceReasons(incident)
   const corridor = corridorEvidence(incident)
   const inferredTopology = inferredTopologyEvidence(incident)
+  const scoreEvidence = confidenceEvidence(incident)
+  const verifiedEvidence = restorationEvidence(ticket)
 
   function assignCrew(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -167,6 +217,35 @@ export function IncidentDetail({
       <div className="confidence-track" aria-label={`Evidence score ${incident.confidence_score} out of 100`}>
         <span style={{ width: `${incident.confidence_score}%` }} />
       </div>
+
+      {scoreEvidence && (
+        <details className="confidence-components">
+          <summary>Inspect score components and caps</summary>
+          <p>
+            {scoreEvidence.policyVersion ?? 'Versioned evidence policy'} · raw score{' '}
+            {scoreEvidence.rawScore ?? incident.confidence_score}
+          </p>
+          <dl>
+            {scoreEvidence.components.map(([name, value]) => (
+              <div key={name}>
+                <dt>{name.replaceAll('_', ' ')}</dt>
+                <dd>+{value}</dd>
+              </div>
+            ))}
+            {scoreEvidence.penalties.map(([name, value]) => (
+              <div key={name} className="score-penalty">
+                <dt>{name.replaceAll('_', ' ')}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+          {scoreEvidence.caps.map((cap) => (
+            <small key={`${cap.maximum}-${cap.reason}`}>
+              Cap {cap.maximum}: {cap.reason}
+            </small>
+          ))}
+        </details>
+      )}
 
       {corridor && (
         <div className="precision-notice" role="status">
@@ -261,6 +340,14 @@ export function IncidentDetail({
         <div className="restoration-notice verified" role="status">
           <strong>Restoration verified</strong>
           <span>Fresh pole telemetry automatically verified and closed this ticket.</span>
+          {verifiedEvidence && (
+            <small>
+              {String(verifiedEvidence.fresh_live_poles ?? 0)}/
+              {String(verifiedEvidence.eligible_poles ?? 0)} eligible poles fresh and live ·{' '}
+              threshold {String(verifiedEvidence.threshold ?? 'configured')} · stable since{' '}
+              {String(verifiedEvidence.stable_since ?? 'recorded verification window')}
+            </small>
+          )}
         </div>
       )}
 

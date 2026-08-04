@@ -9,6 +9,7 @@ import type {
   NetworkPole,
   NetworkSubdivision,
   NetworkTopology,
+  OperationalDiagnostics,
   Ticket,
 } from './api/types'
 
@@ -38,6 +39,29 @@ const health: HealthResponse = {
   dependencies: { database: { status: 'ok' }, redis: { status: 'ok' } },
 }
 
+const diagnostics: OperationalDiagnostics = {
+  status: 'healthy',
+  generated_at: '2026-08-04T01:00:00Z',
+  dependencies: {
+    database: { status: 'ok' },
+    redis: { status: 'ok' },
+  },
+  worker: { status: 'ok', last_seen_at: '2026-08-04T01:00:00Z' },
+  queue: {
+    stream_length: 12,
+    pending: 0,
+    lag: 0,
+    dead_letter_count: 0,
+    analysis_pending: 0,
+    analysis_overdue: 0,
+  },
+  device_counts: { HEALTHY: 1 },
+  pole_state_counts: { LIVE: 1, STALE: 0, DARK: 0 },
+  incident_counts: { ACTIVE: 1 },
+  latest_processed_at: '2026-08-04T01:00:00Z',
+  warnings: [],
+}
+
 const incident: Incident = {
   incident_id: 'incident-1',
   fingerprint: 'span:DT-001:P-001->P-002',
@@ -60,6 +84,20 @@ const incident: Incident = {
         'explicit DARK evidence at boundary child P-002',
       ],
       negative_reasons: [],
+      score_policy_version: 'evidence-score-v1',
+      raw_score: 100,
+      components: {
+        topology_provenance: 25,
+        boundary_evidence: 30,
+        downstream_corroboration: 25,
+        temporal_coherence: 10,
+        sensor_quality: 10,
+      },
+      penalties: {
+        post_onset_live_contradictions: 0,
+        missing_or_unhealthy_evidence: 0,
+      },
+      caps: [],
     },
   },
   suppression_reason: null,
@@ -275,12 +313,20 @@ function installFetchRouter(options?: {
   incidents?: Incident[]
   suppressedIncidents?: Incident[]
   unhealthy?: boolean
+  diagnostics?: OperationalDiagnostics
   ticket?: Ticket
 }) {
   const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url === '/health') {
       return jsonResponse(options?.unhealthy ? { ...health, status: 'unhealthy' } : health)
+    }
+    if (url === '/api/diagnostics/overview') return jsonResponse(options?.diagnostics ?? diagnostics)
+    if (url === '/api/diagnostics/telemetry?limit=10') {
+      return jsonResponse({ items: [], next_cursor: null })
+    }
+    if (url === '/api/diagnostics/devices?status=STALE&limit=10') {
+      return jsonResponse({ items: [], next_cursor: null })
     }
     if (url === '/api/incidents?status=ACTIVE&limit=100') {
       return jsonResponse(options?.incidents ?? [incident])
@@ -394,7 +440,7 @@ describe('App', () => {
     renderApp()
 
     expect(await screen.findByRole('heading', { name: 'P-001 → P-002' })).toBeInTheDocument()
-    expect(screen.getAllByText('SPAN FAULT')).toHaveLength(2)
+    expect(screen.getAllByText('SPAN FAULT')).toHaveLength(3)
     expect(screen.getAllByText('EXACT SPAN')).toHaveLength(2)
     expect(screen.getAllByText('3 poles')).toHaveLength(2)
     expect(screen.getByText('Evidence score 100/100')).toBeInTheDocument()
@@ -411,6 +457,10 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'Assign crew' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Claim physical repair' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Send selected repair telemetry' })).toBeDisabled()
+    expect(screen.getByRole('heading', { name: 'Operational diagnostics' })).toBeInTheDocument()
+    expect(screen.getByText('No dependency, queue, retry, or dead-letter warnings.')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Inspect score components and caps'))
+    expect(screen.getByText('topology provenance')).toBeInTheDocument()
   })
 
   it('applies a valid ticket action and refreshes server state', async () => {
@@ -454,12 +504,35 @@ describe('App', () => {
     expect(screen.getByText(/Last refresh/)).toBeInTheDocument()
   })
 
+  it('keeps incidents usable while worker diagnostics are degraded', async () => {
+    installFetchRouter({
+      diagnostics: {
+        ...diagnostics,
+        status: 'degraded',
+        worker: { status: 'stale', last_seen_at: null },
+        warnings: [
+          {
+            code: 'WORKER_STALE',
+            severity: 'critical',
+            message: 'The telemetry worker heartbeat is missing or stale.',
+          },
+        ],
+      },
+    })
+    renderApp()
+
+    expect(await screen.findByText('WORKER STALE')).toBeInTheDocument()
+    expect(screen.getByText('System degraded')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'P-001 → P-002' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Acknowledge incident' })).toBeEnabled()
+  })
+
   it('shows a suppressed sensor diagnostic without ticket actions', async () => {
     installFetchRouter({ incidents: [], suppressedIncidents: [suppressedIncident] })
     renderApp()
 
     expect(await screen.findByRole('heading', { name: 'DEV-P-002' })).toBeInTheDocument()
-    expect(screen.getAllByText('SENSOR ANOMALY')).toHaveLength(2)
+    expect(screen.getAllByText('SENSOR ANOMALY')).toHaveLength(3)
     expect(screen.getAllByText('SUPPRESSED')).toHaveLength(2)
     expect(screen.getByText('No dispatch ticket created')).toBeInTheDocument()
     expect(screen.getByText(/telemetry-consistency-rule/)).toBeInTheDocument()

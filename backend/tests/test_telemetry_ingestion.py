@@ -219,6 +219,8 @@ async def test_oversized_request_is_rejected_before_ingestion() -> None:
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "REQUEST_TOO_LARGE"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-correlation-id"]
 
 
 @pytest.mark.asyncio

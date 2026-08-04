@@ -497,12 +497,42 @@ After 32 minutes the whole demo became stale, and fault injection could produce 
 commands. Periodic public-path telemetry preserves both long-running usability and
 the distinction between silence, intentional offline devices, and actual outages.
 
+## 2026-08-04 — Separate liveness from partial operational diagnostics
+
+**Chosen:** `/health` remains a strict PostgreSQL-and-Redis deployment gate. A
+separate diagnostics service returns a partial operator snapshot containing the
+expiring worker heartbeat, Redis consumer lag and pending counts, due analysis
+retries, dead-letter depth, durable device/pole/incident counts, and last processed
+telemetry time. Losing one dependency degrades the response without discarding
+evidence obtained from the other.
+
+Telemetry and device-health details use cursor pages capped at 100 and never return
+the immutable `raw_payload`. HTTP logs contain the request correlation ID, method,
+path, status, and duration but omit query strings and bodies. Domain logs use the
+same identifier names for device, pole, DT, feeder, incident, and ticket context.
+
+Production is same-origin through a runtime-configured Nginx proxy over Railway
+private DNS. Both proxy and API apply request bounds and security headers. A
+production settings guard rejects simulator routes, and the production frontend
+build removes the controls. Managed driverless PostgreSQL URLs are normalized to
+SQLAlchemy's explicit psycopg 3 dialect before creating the async engine.
+
+**Reason:** A binary liveness probe cannot explain a stale worker, accumulating
+queue, retry loop, or poison event. Conversely, making worker freshness part of API
+liveness would cause unnecessary API replacement and hide durable reads during a
+worker outage. Partial diagnostics preserve operator context while deployment
+health remains unambiguous.
+
+**Rejected:** exposing raw telemetry bodies in the console, unbounded history
+queries, logging request queries/bodies, treating missing diagnostic data as zero,
+public production simulator routes, and browser access to private backend DNS.
+
 ## What we would do with two more weeks
 
 - Add a PostgreSQL inbox/outbox around queue publication.
 - Evaluate inferred topology on more road layouts and add road/line geometry evidence.
 - Add multi-subdivision partitioning and authorization.
-- Add richer operational metrics and alerting.
+- Export the bounded diagnostic signals to an external metrics/alerting platform.
 - Pilot an SSE incident feed if polling measurements justify it.
 
 ## Known fragile areas

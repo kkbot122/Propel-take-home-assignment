@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     scheduled_outage_early_grace_seconds: float = Field(default=600, ge=0, le=3_600)
     scheduled_outage_overrun_grace_seconds: float = Field(default=2_400, ge=0, le=14_400)
     worker_retry_delay_seconds: float = Field(default=1.0, gt=0, le=30)
+    worker_heartbeat_key: str = Field(
+        default="propel:worker:heartbeat", min_length=1, max_length=128
+    )
+    worker_heartbeat_interval_seconds: float = Field(default=5, gt=0, le=300)
+    worker_heartbeat_ttl_seconds: int = Field(default=30, ge=5, le=3_600)
+    diagnostics_worker_stale_after_seconds: float = Field(default=15, gt=0, le=3_600)
+    diagnostics_telemetry_backlog_warning: int = Field(default=1_000, ge=1, le=1_000_000)
     restoration_threshold: float = Field(default=0.8, gt=0, le=1)
     restoration_stabilization_seconds: float = Field(default=10.0, ge=0, le=300)
     simulator_telemetry_url: str = Field(
@@ -59,6 +66,8 @@ class Settings(BaseSettings):
     simulator_heartbeat_interval_seconds: float = Field(default=600, gt=0, le=86_400)
     simulator_heartbeat_batch_size: int = Field(default=500, ge=1, le=2_000)
     simulator_enabled: bool = True
+    cors_allowed_origins: str = Field(default="", max_length=2_048)
+    allowed_hosts: str = Field(default="*", max_length=2_048)
     simulator_generated_network_enabled: bool = True
     simulator_generation_seed: int = Field(default=7_307, ge=0)
     simulator_generation_substations: int = Field(default=2, ge=1, le=20)
@@ -70,6 +79,14 @@ class Settings(BaseSettings):
     simulator_generation_sensor_coverage_ratio: float = Field(default=0.91, ge=0, le=1)
     simulator_generation_offline_device_ratio: float = Field(default=0.04, ge=0, le=1)
     simulator_generation_firmware_12_ratio: float = Field(default=0.08, ge=0, le=1)
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [item.strip() for item in self.cors_allowed_origins.split(",") if item.strip()]
+
+    @property
+    def trusted_hosts(self) -> list[str]:
+        return [item.strip() for item in self.allowed_hosts.split(",") if item.strip()]
 
 
 @lru_cache

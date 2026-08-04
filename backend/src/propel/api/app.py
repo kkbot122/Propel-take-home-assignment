@@ -1,11 +1,18 @@
+import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from time import monotonic
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
 
+from propel.api.routes.diagnostics import router as diagnostics_router
 from propel.api.routes.incidents import router as incidents_router
 from propel.api.routes.simulator import router as simulator_router
 from propel.api.routes.telemetry import error_response
@@ -17,6 +24,7 @@ from propel.api.schemas.telemetry import (
     ValidationIssue,
 )
 from propel.infra.dependencies import ApplicationResources
+from propel.infra.diagnostics import OperationalDiagnosticsService
 from propel.infra.health import HealthService
 from propel.infra.incidents import PostgresIncidentService
 from propel.infra.settings import Settings, get_settings
@@ -31,8 +39,23 @@ def create_app(
     telemetry_service: TelemetryIngestionService | None = None,
     incident_service: PostgresIncidentService | None = None,
     simulator_service: PostgresSimulatorService | None = None,
+    diagnostics_service: OperationalDiagnosticsService | None = None,
 ) -> FastAPI:
     application_settings = settings or get_settings()
+    application_logger = logging.getLogger("propel")
+    application_logger.setLevel(logging.INFO)
+    if not any(
+        getattr(item, "propel_application_handler", False) for item in application_logger.handlers
+    ):
+        application_handler = logging.StreamHandler()
+        application_handler.setFormatter(logging.Formatter("%(message)s"))
+        application_handler.propel_application_handler = True  # type: ignore[attr-defined]
+        application_logger.addHandler(application_handler)
+    if (
+        application_settings.environment.lower() == "production"
+        and application_settings.simulator_enabled
+    ):
+        raise RuntimeError("SIMULATOR_ENABLED must be false when ENVIRONMENT=production")
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -41,6 +64,7 @@ def create_app(
             health_service is None
             or telemetry_service is None
             or incident_service is None
+            or diagnostics_service is None
             or (application_settings.simulator_enabled and simulator_service is None)
         ):
             resources = ApplicationResources.create(application_settings)
@@ -72,6 +96,26 @@ def create_app(
             application.state.incident_service = PostgresIncidentService(resources.database)
         else:
             application.state.incident_service = incident_service
+        if diagnostics_service is None:
+            if resources is None:
+                raise RuntimeError("application resources were not created")
+            application.state.diagnostics_service = OperationalDiagnosticsService(
+                resources.database,
+                resources.redis,
+                telemetry_stream_name=application_settings.telemetry_stream_name,
+                telemetry_consumer_group=application_settings.telemetry_consumer_group,
+                dead_letter_stream_name=application_settings.telemetry_dead_letter_stream_name,
+                analysis_due_set_name=application_settings.analysis_due_set_name,
+                worker_heartbeat_key=application_settings.worker_heartbeat_key,
+                worker_stale_after_seconds=(
+                    application_settings.diagnostics_worker_stale_after_seconds
+                ),
+                telemetry_backlog_warning=(
+                    application_settings.diagnostics_telemetry_backlog_warning
+                ),
+            )
+        else:
+            application.state.diagnostics_service = diagnostics_service
         if application_settings.simulator_enabled and simulator_service is None:
             if resources is None:
                 raise RuntimeError("application resources were not created")
@@ -101,6 +145,64 @@ def create_app(
         version="0.1.0",
         lifespan=lifespan,
     )
+    application.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=application_settings.trusted_hosts or ["*"],
+    )
+    if application_settings.cors_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=application_settings.cors_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type", "X-Correlation-ID"],
+        )
+
+    request_logger = logging.getLogger("propel.http")
+
+    async def add_request_diagnostics(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        supplied_correlation_id = request.headers.get("x-correlation-id", "")[:128]
+        try:
+            correlation_id = str(UUID(supplied_correlation_id))
+        except ValueError:
+            correlation_id = str(uuid4())
+        request.state.correlation_id = correlation_id
+        started_at = monotonic()
+        try:
+            response = await call_next(request)
+        except Exception:
+            request_logger.exception(
+                json.dumps(
+                    {
+                        "event": "request_failed",
+                        "correlation_id": correlation_id,
+                        "method": request.method,
+                        "path": request.url.path,
+                    }
+                )
+            )
+            raise
+        response.headers["X-Correlation-ID"] = correlation_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        request_logger.info(
+            json.dumps(
+                {
+                    "event": "request_completed",
+                    "correlation_id": correlation_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": response.status_code,
+                    "duration_ms": round((monotonic() - started_at) * 1_000, 2),
+                }
+            )
+        )
+        return response
 
     @application.middleware("http")
     async def enforce_telemetry_request_size(
@@ -134,6 +236,10 @@ def create_app(
                     retryable=False,
                 )
         return await call_next(request)
+
+    # Register this last so correlation, logging, and security headers also wrap
+    # request-limit rejections and trusted-host/CORS responses.
+    application.middleware("http")(add_request_diagnostics)
 
     @application.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -185,6 +291,7 @@ def create_app(
 
     application.include_router(telemetry_router)
     application.include_router(incidents_router)
+    application.include_router(diagnostics_router)
     if application_settings.simulator_enabled:
         application.include_router(simulator_router)
 

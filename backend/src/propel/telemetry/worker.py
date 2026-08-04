@@ -102,8 +102,19 @@ async def run_worker() -> None:
             )
         next_stale_scan_at = monotonic()
         next_heartbeat_at = monotonic()
+        next_worker_heartbeat_at = monotonic()
         while not stop_event.is_set():
             try:
+                if monotonic() >= next_worker_heartbeat_at:
+                    worker_heartbeat_at = datetime.now(UTC)
+                    await resources.redis.set(
+                        settings.worker_heartbeat_key,
+                        worker_heartbeat_at.isoformat(),
+                        ex=settings.worker_heartbeat_ttl_seconds,
+                    )
+                    next_worker_heartbeat_at = (
+                        monotonic() + settings.worker_heartbeat_interval_seconds
+                    )
                 await consumer.run_cycle()
                 if heartbeat_emitter is not None and monotonic() >= next_heartbeat_at:
                     heartbeat_at = datetime.now(UTC)

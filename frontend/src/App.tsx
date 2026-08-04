@@ -12,9 +12,11 @@ import type {
 import { IncidentDetail } from './components/IncidentDetail'
 import { IncidentList } from './components/IncidentList'
 import { NetworkMap } from './components/NetworkMap'
+import { OperationalDiagnostics } from './components/OperationalDiagnostics'
 
 const POLL_INTERVAL_MS = 5_000
 const ACTIVE_FAULTS_STORAGE_KEY = 'propel-active-simulator-faults'
+const SIMULATOR_CONTROLS_ENABLED = import.meta.env.VITE_SIMULATOR_ENABLED !== 'false'
 
 type TicketCommand =
   | { action: 'acknowledge'; ticketId: string }
@@ -84,6 +86,24 @@ export function App() {
   const healthQuery = useQuery({
     queryKey: ['health'],
     queryFn: api.health,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
+  const diagnosticsQuery = useQuery({
+    queryKey: ['diagnostics', 'overview'],
+    queryFn: api.diagnostics,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
+  const telemetryDiagnosticsQuery = useQuery({
+    queryKey: ['diagnostics', 'telemetry'],
+    queryFn: api.recentTelemetry,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
+  const staleDevicesQuery = useQuery({
+    queryKey: ['diagnostics', 'devices', 'stale'],
+    queryFn: api.unhealthyDevices,
     refetchInterval: POLL_INTERVAL_MS,
     retry: 1,
   })
@@ -189,6 +209,7 @@ export function App() {
       queryClient.invalidateQueries({ queryKey: ['incident'] }),
       queryClient.invalidateQueries({ queryKey: ['ticket'] }),
       queryClient.invalidateQueries({ queryKey: ['network', 'subdivision', 'poles'] }),
+      queryClient.invalidateQueries({ queryKey: ['diagnostics'] }),
     ])
   }
 
@@ -260,8 +281,17 @@ export function App() {
     incidentQuery.error,
     ticketQuery.error,
   )
+  const diagnosticsError = queryError(
+    diagnosticsQuery.error,
+    telemetryDiagnosticsQuery.error,
+    staleDevicesQuery.error,
+  )
   const mutationError = queryError(ticketMutation.error, simulatorMutation.error)
-  const backendHealthy = healthQuery.data?.status === 'healthy' && backendError === null
+  const backendHealthy =
+    healthQuery.data?.status === 'healthy' &&
+    diagnosticsQuery.data?.status === 'healthy' &&
+    backendError === null &&
+    diagnosticsError === null
   const ticketStatus = ticket?.status ?? selectedIncident?.ticket_status
   const operationPending = ticketMutation.isPending || simulatorMutation.isPending
 
@@ -297,7 +327,16 @@ export function App() {
         </div>
       )}
 
-      <section className="scenario-bar" aria-labelledby="scenario-title">
+      <OperationalDiagnostics
+        diagnostics={diagnosticsQuery.data ?? null}
+        telemetry={telemetryDiagnosticsQuery.data?.items ?? []}
+        staleDevices={staleDevicesQuery.data?.items ?? []}
+        loading={diagnosticsQuery.isPending}
+        error={diagnosticsError}
+        onRetry={() => void queryClient.refetchQueries({ queryKey: ['diagnostics'] })}
+      />
+
+      {SIMULATOR_CONTROLS_ENABLED && <section className="scenario-bar" aria-labelledby="scenario-title">
         <div className="scenario-copy">
           <span className="scenario-index">01</span>
           <div>
@@ -474,7 +513,7 @@ export function App() {
             Reset simulation
           </button>
         </div>
-      </section>
+      </section>}
 
       {(commandMessage || mutationError) && (
         <div className={`command-message${mutationError ? ' error' : ''}`} role="status">
@@ -606,7 +645,7 @@ export function App() {
       </section>
 
       <footer className="app-footer">
-        <span>Propel · PB-07 subdivision network</span>
+        <span>Propel · PB-09 operational diagnostics</span>
         <span>Polling every 5 seconds · verification remains telemetry-only</span>
       </footer>
     </main>

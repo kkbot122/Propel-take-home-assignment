@@ -121,6 +121,21 @@ The first screen is an operator workspace with an active-incident queue, a surve
 
 Only the transition valid for the current ticket state is rendered. `RESOLVED` is presented as repair claimed but not verified until fresh telemetry closes the ticket. Query failures make the system-health indicator degraded and display a retryable failure banner rather than silently presenting cached values as current. The built image receives `VITE_OSM_TILE_URL` as a Compose build argument, while OpenStreetMap attribution stays visible regardless of tile endpoint.
 
+PB-09 adds a separate operational-diagnostics read model. The API keeps its
+strict liveness endpoint small, while `/api/diagnostics/overview` independently
+reports PostgreSQL, Redis, the expiring worker heartbeat, consumer lag/pending
+counts, analysis due/retry counts, and dead-letter depth. A failure in one source
+returns a partial degraded snapshot instead of hiding healthy evidence from the
+operator. Telemetry and device-health history are cursor-paged, capped at 100,
+and deliberately exclude raw payloads. The console keeps these records in a
+collapsed secondary panel beneath the summarized operator decision.
+
+The production frontend remains a same-origin Nginx gateway. Its runtime template
+selects the deployment DNS resolver and private API origin without exposing the
+backend to the browser. Nginx and FastAPI apply defense-in-depth security headers;
+both layers enforce telemetry body bounds. Production startup rejects enabled
+simulator routes, and the production UI build omits simulator controls.
+
 PostgreSQL 17 is the only persistent source of truth. Redis 7.4 Streams buffers telemetry and a Redis sorted set debounces DT analysis. Docker Compose is the local runtime. The public deployment target is Railway using the same repository Dockerfiles and private service networking.
 
 The logical boxes above are not independent microservices. The long-lived deployment units are:

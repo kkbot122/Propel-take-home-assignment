@@ -461,6 +461,7 @@ class RedisAnalysisScheduler:
                 json.dumps(
                     {
                         "event": "fault_candidate_localized",
+                        "feeder_id": candidate.feeder_id,
                         "dt_id": candidate.dt_id,
                         "classification": candidate.classification.value,
                         "suspected_asset_id": candidate.suspected_asset_id,

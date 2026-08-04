@@ -6,7 +6,10 @@ import type {
   NetworkOverview,
   NetworkPole,
   NetworkSubdivision,
+  OperationalDiagnostics,
   SimulatedFault,
+  DeviceHealthDiagnosticPage,
+  TelemetryDiagnosticPage,
   Ticket,
 } from './types'
 
@@ -44,6 +47,12 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => requestJson<HealthResponse>('/health'),
+  diagnostics: () =>
+    requestJson<OperationalDiagnostics>('/api/diagnostics/overview'),
+  recentTelemetry: () =>
+    requestJson<TelemetryDiagnosticPage>('/api/diagnostics/telemetry?limit=10'),
+  unhealthyDevices: () =>
+    requestJson<DeviceHealthDiagnosticPage>('/api/diagnostics/devices?status=STALE&limit=10'),
   incidents: () => requestJson<Incident[]>('/api/incidents?status=ACTIVE&limit=100'),
   suppressedIncidents: () =>
     requestJson<Incident[]>('/api/incidents?status=SUPPRESSED&limit=100'),

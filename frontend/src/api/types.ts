@@ -173,6 +173,74 @@ export interface HealthResponse {
   dependencies: Record<string, { status: string }>
 }
 
+export interface DiagnosticWarning {
+  code: string
+  severity: 'critical' | 'warning' | 'info'
+  message: string
+}
+
+export interface OperationalDiagnostics {
+  status: 'healthy' | 'degraded'
+  generated_at: string
+  dependencies: Record<string, { status: 'ok' | 'unavailable' }>
+  worker: { status: 'ok' | 'stale' | 'unknown'; last_seen_at: string | null }
+  queue: {
+    stream_length: number | null
+    pending: number | null
+    lag: number | null
+    dead_letter_count: number | null
+    analysis_pending: number | null
+    analysis_overdue: number | null
+  }
+  device_counts: Record<string, number>
+  pole_state_counts: Record<string, number>
+  incident_counts: Record<string, number>
+  latest_processed_at: string | null
+  warnings: DiagnosticWarning[]
+}
+
+export interface TelemetryDiagnostic {
+  event_id: string
+  correlation_id: string
+  device_id: string
+  pole_id: string
+  event_type: string
+  energized: boolean
+  device_timestamp: string
+  received_at: string
+  processed_at: string
+  sequence: number
+  processing_outcome: string
+  origin: string
+  state_changed: boolean
+}
+
+export interface TelemetryDiagnosticPage {
+  items: TelemetryDiagnostic[]
+  next_cursor: string | null
+}
+
+export interface DeviceHealthDiagnostic {
+  device_id: string
+  pole_id: string | null
+  dt_id: string | null
+  status: string
+  pole_state: string
+  last_seen_at: string | null
+  last_sequence: number | null
+  last_event_type: string | null
+  firmware: string | null
+  battery_mv: number | null
+  rssi: number | null
+  status_reason: string
+  can_report_power_loss: boolean
+}
+
+export interface DeviceHealthDiagnosticPage {
+  items: DeviceHealthDiagnostic[]
+  next_cursor: string | null
+}
+
 export interface ApiErrorBody {
   error?: {
     code?: string

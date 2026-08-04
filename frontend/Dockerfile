@@ -15,7 +15,9 @@ COPY nginx.conf ./
 COPY src ./src
 
 ARG VITE_OSM_TILE_URL=https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png
+ARG VITE_SIMULATOR_ENABLED=true
 ENV VITE_OSM_TILE_URL=$VITE_OSM_TILE_URL
+ENV VITE_SIMULATOR_ENABLED=$VITE_SIMULATOR_ENABLED
 
 RUN pnpm build
 
@@ -42,7 +44,11 @@ CMD ["pnpm", "e2e"]
 
 FROM nginx:1.28-alpine AS runtime
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+ENV BACKEND_ORIGIN=http://backend-api:8000 \
+    NGINX_RESOLVER=127.0.0.11 \
+    NGINX_ENVSUBST_FILTER="^(BACKEND_ORIGIN|NGINX_RESOLVER)$"
+
+COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 8080

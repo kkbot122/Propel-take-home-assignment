@@ -1079,7 +1079,7 @@ Build the generator early because every later task depends on realistic test dat
 - [x] Add active-incident count.
 - [x] Add backend-health indicator.
 - [x] Add loading and error states.
-- [ ] Test: console remains usable when one request fails.
+- [x] Test: console remains usable when one request fails.
 
 ## 19.2 Build incident list
 
@@ -1112,7 +1112,7 @@ Build the generator early because every later task depends on realistic test dat
 - [x] Show concise reasons.
 - [x] Show topology source.
 - [x] Show ticket history.
-- [ ] Keep raw telemetry in a secondary diagnostics section.
+- [x] Keep raw telemetry in a secondary diagnostics section.
 - [ ] Test: a non-technical user can identify what broke and where from this panel.
 
 ## 19.5 Add ticket actions
@@ -1293,7 +1293,7 @@ Recommended feature: operator-facing incident summary after deterministic locali
 - [x] Abandon a claimed event and start a replacement worker.
 - [x] Restart after PostgreSQL commit but before Redis acknowledgement.
 - [x] Confirm pending events are processed exactly once at the state level.
-- [ ] Test that the UI reports delayed processing rather than silently failing
+- [x] Test that the UI reports delayed processing rather than silently failing
       (operator warning work remains in PB-09).
 
 ---
@@ -1302,12 +1302,12 @@ Recommended feature: operator-facing incident summary after deterministic locali
 
 ## 23.1 Add structured logs
 
-- [ ] Log request or event correlation IDs.
-- [ ] Log processing outcome.
-- [ ] Log incident creation and updates.
-- [ ] Log ticket transitions.
-- [ ] Avoid logging secrets.
-- [ ] Avoid dumping excessive raw payloads in normal mode.
+- [x] Log request or event correlation IDs.
+- [x] Log processing outcome.
+- [x] Log incident creation and updates.
+- [x] Log ticket transitions.
+- [x] Avoid logging secrets.
+- [x] Avoid dumping excessive raw payloads in normal mode.
 - [ ] Test: one simulated fault can be traced through the logs.
 
 ## 23.2 Add metrics
@@ -1325,10 +1325,10 @@ Recommended feature: operator-facing incident summary after deterministic locali
 ## 23.3 Add operator-visible system warnings
 
 - [ ] Scheduled-outage feed unavailable.
-- [ ] Redis backlog high.
-- [ ] Telemetry processing delayed.
+- [x] Redis backlog high.
+- [x] Telemetry processing delayed.
 - [ ] Topology inference unavailable.
-- [ ] Test: warnings appear without breaking incident access.
+- [x] Test: warnings appear without breaking incident access.
 
 ---
 
@@ -1336,30 +1336,30 @@ Recommended feature: operator-facing incident summary after deterministic locali
 
 ## 24.1 Protect configuration
 
-- [ ] Store secrets only in environment variables.
-- [ ] Commit `.env.example`, not `.env`.
+- [x] Store secrets only in environment variables.
+- [x] Commit `.env.example`, not `.env`.
 - [ ] Scan git history before submission.
-- [ ] Test: application starts with safe local defaults where possible.
+- [x] Test: application starts with safe local defaults where possible.
 
 ## 24.2 Add input limits
 
-- [ ] Limit telemetry request size.
-- [ ] Limit batch size.
-- [ ] Validate strings and IDs.
-- [ ] Add request timeouts.
-- [ ] Test oversized or malformed requests.
+- [x] Limit telemetry request size.
+- [x] Limit batch size.
+- [x] Validate strings and IDs.
+- [x] Add request timeouts.
+- [x] Test oversized or malformed requests.
 
 ## 24.3 Add database failure handling
 
-- [ ] Return clear temporary errors.
-- [ ] Avoid acknowledging queued events before persistence succeeds.
-- [ ] Test transient database unavailability.
+- [x] Return clear temporary errors.
+- [x] Avoid acknowledging queued events before persistence succeeds.
+- [x] Test transient database unavailability.
 
 ## 24.4 Add Redis failure handling
 
-- [ ] Fail ingestion clearly or use a documented fallback.
-- [ ] Avoid claiming accepted telemetry when it was not durably queued.
-- [ ] Test transient Redis unavailability.
+- [x] Fail ingestion clearly or use a documented fallback.
+- [x] Avoid claiming accepted telemetry when it was not durably queued.
+- [x] Test transient Redis unavailability.
 
 ---
 
@@ -1393,14 +1393,14 @@ Recommended feature: operator-facing incident summary after deterministic locali
 
 ## 25.3 Create `DEPLOYMENT.md`
 
-- [ ] List prerequisites.
-- [ ] Add exact local commands.
-- [ ] Document every environment variable.
-- [ ] Add deployment commands.
-- [ ] Add health verification.
-- [ ] Add reset instructions.
-- [ ] Add troubleshooting based on failures actually encountered.
-- [ ] Test the guide on a clean environment.
+- [x] List prerequisites.
+- [x] Add exact local commands.
+- [x] Document every environment variable.
+- [x] Add deployment commands.
+- [x] Add health verification.
+- [x] Add reset instructions.
+- [x] Add troubleshooting based on failures actually encountered.
+- [x] Test the guide on a clean environment.
 
 ## 25.4 Create `DECISIONS.md`
 
