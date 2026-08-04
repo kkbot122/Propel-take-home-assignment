@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
@@ -97,6 +97,8 @@ class HttpSimulatorTelemetryGateway:
 
 
 class PostgresSimulatorService:
+    _INJECTION_LOCK_KEY = 73_672_603
+
     def __init__(
         self,
         engine: AsyncEngine,
@@ -123,22 +125,29 @@ class PostgresSimulatorService:
                 )
                 if transformer_id is None:
                     raise InvalidSimulatorSpanError
-                active_fault = await session.scalar(
-                    select(SimulatedFault).where(
-                        SimulatedFault.status == SimulatorFaultStatus.ACTIVE,
-                    )
+                parent_id, child_id, affected_ids = await self._resolve_span(
+                    session,
+                    transformer_id,
+                    parent_pole_id,
+                    child_pole_id,
                 )
-                if active_fault is not None:
-                    if active_fault.injection_telemetry_at is not None:
-                        raise ActiveSimulatorFaultError
-                    fault_id = active_fault.fault_id
+                active_faults = await self._locked_active_faults(session)
+                resumable = next(
+                    (
+                        fault
+                        for fault in active_faults
+                        if fault.fault_type == SimulatorFaultType.SPAN_FAULT
+                        and fault.dt_id == transformer_id
+                        and fault.parent_pole_id == parent_id
+                        and fault.child_pole_id == child_id
+                        and fault.injection_telemetry_at is None
+                    ),
+                    None,
+                )
+                if resumable is not None:
+                    fault_id = resumable.fault_id
                 else:
-                    parent_id, child_id, affected_ids = await self._resolve_span(
-                        session,
-                        transformer_id,
-                        parent_pole_id,
-                        child_pole_id,
-                    )
+                    self._require_independent_scope(active_faults, affected_ids)
                     fault = SimulatedFault(
                         fault_type=SimulatorFaultType.SPAN_FAULT,
                         dt_id=transformer_id,
@@ -184,26 +193,20 @@ class PostgresSimulatorService:
     async def _inject_fixed_scope_fault(
         self,
         fault_type: SimulatorFaultType,
+        *,
+        dt_id: str,
+        feeder_id: str,
     ) -> SimulatedFaultView:
         if fault_type not in (SimulatorFaultType.DT_FAULT, SimulatorFaultType.FEEDER_FAULT):
             raise InvalidSimulatorSpanError
         injected_at = self._clock()
         try:
             async with self._session_factory.begin() as session:
-                active_fault = await session.scalar(
-                    select(SimulatedFault).where(
-                        SimulatedFault.status == SimulatorFaultStatus.ACTIVE
-                    )
-                )
-                if active_fault is not None:
-                    raise ActiveSimulatorFaultError
                 feeder_internal_id = await session.scalar(
-                    select(Feeder.id).where(Feeder.feeder_id == "FDR-001")
+                    select(Feeder.id).where(Feeder.feeder_id == feeder_id)
                 )
                 transformer_internal_id = await session.scalar(
-                    select(DistributionTransformer.id).where(
-                        DistributionTransformer.dt_id == "DT-001"
-                    )
+                    select(DistributionTransformer.id).where(DistributionTransformer.dt_id == dt_id)
                 )
                 if feeder_internal_id is None or transformer_internal_id is None:
                     raise InvalidSimulatorSpanError
@@ -213,6 +216,8 @@ class PostgresSimulatorService:
                 else:
                     pole_statement = pole_statement.where(Pole.feeder_id == feeder_internal_id)
                 affected_ids = tuple(await session.scalars(pole_statement.order_by(Pole.pole_id)))
+                active_faults = await self._locked_active_faults(session)
+                self._require_independent_scope(active_faults, affected_ids)
                 fault = SimulatedFault(
                     fault_type=fault_type,
                     feeder_id=(
@@ -260,6 +265,34 @@ class PostgresSimulatorService:
         except SQLAlchemyError as error:
             raise SimulatorStoreUnavailableError from error
         return view
+
+    async def _locked_active_faults(
+        self,
+        session: AsyncSession,
+    ) -> tuple[SimulatedFault, ...]:
+        # The advisory transaction lock closes the zero-row race when two independent
+        # injections check active scopes concurrently.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": self._INJECTION_LOCK_KEY},
+        )
+        return tuple(
+            await session.scalars(
+                select(SimulatedFault)
+                .where(SimulatedFault.status == SimulatorFaultStatus.ACTIVE)
+                .order_by(SimulatedFault.injected_at, SimulatedFault.fault_id)
+                .with_for_update()
+            )
+        )
+
+    @staticmethod
+    def _require_independent_scope(
+        active_faults: Sequence[SimulatedFault],
+        affected_ids: Sequence[str],
+    ) -> None:
+        requested = set(affected_ids)
+        if any(requested.intersection(fault.deenergized_pole_ids) for fault in active_faults):
+            raise ActiveSimulatorFaultError
 
     async def repair_fault(self, fault_id: UUID) -> SimulatedFaultView:
         repair_at = self._clock()
@@ -514,6 +547,7 @@ class PostgresSimulatorService:
         dt_id: str,
         parent_pole_id: str,
         child_pole_id: str,
+        feeder_id: str = "FDR-001",
     ) -> SimulatedFaultView:
         if fault_type == SimulatorFaultType.SPAN_FAULT:
             return await self.inject_fixed_span_fault(
@@ -521,4 +555,8 @@ class PostgresSimulatorService:
                 parent_pole_id=parent_pole_id,
                 child_pole_id=child_pole_id,
             )
-        return await self._inject_fixed_scope_fault(fault_type)
+        return await self._inject_fixed_scope_fault(
+            fault_type,
+            dt_id=dt_id,
+            feeder_id=feeder_id,
+        )

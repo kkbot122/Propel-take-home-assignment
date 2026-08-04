@@ -629,6 +629,12 @@ The grouping key is based on:
 
 A new event updates an existing active incident when it is explained by the same root candidate. A separate incident is created when the topology supports an independent boundary.
 
+When several candidates are persisted together, they are written in canonical
+fingerprint order. This prevents concurrent analyses containing the same
+independent roots in different input orders from deadlocking on active incident
+indexes. Dark observations are assigned to the nearest retained surveyed root,
+so one pole cannot inflate two incident scopes.
+
 The incident retains the evidence used at detection time so later state changes do not erase the original reasoning.
 
 ## 12. Confidence model
@@ -719,7 +725,7 @@ The exact schema will be maintained in generated OpenAPI documentation. Planned 
 | `GET`  | `/api/network/poles`                | Read poles for map display                 |
 | `GET`  | `/api/network/topology/{dt_id}`     | Read surveyed or inferred DT topology      |
 | `GET`  | `/api/scheduled-outages`            | Read current scheduled outages             |
-| `POST` | `/api/simulator/faults`             | Inject the fixed surveyed span fault       |
+| `POST` | `/api/simulator/faults`             | Inject a fixed independent surveyed fault  |
 | `POST` | `/api/simulator/faults/{id}/repair` | Emit restoration telemetry for a fault     |
 | `POST` | `/api/simulator/reset`              | Repair every active simulated fault        |
 | `POST` | `/api/simulator/noise`              | Inject independent noise                   |

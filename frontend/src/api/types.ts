@@ -121,6 +121,14 @@ export interface SimulatedFault {
   emitted_event_ids: string[]
 }
 
+export interface InjectFaultRequest {
+  fault_type: SimulatedFault['fault_type']
+  feeder_id?: 'FDR-001'
+  dt_id?: 'DT-001' | 'DT-002'
+  parent_pole_id?: 'P-001' | 'P-101'
+  child_pole_id?: 'P-002' | 'P-102'
+}
+
 export interface HealthResponse {
   status: 'healthy' | 'unhealthy'
   service: string

@@ -134,11 +134,9 @@ def _build_span_candidates(
     schedule_overrun_grace: timedelta,
 ) -> list[FaultCandidate]:
     candidates: list[FaultCandidate] = []
-
-    for span in sorted(
-        spans,
-        key=lambda item: (item.parent_pole_id or "", item.child_pole_id),
-    ):
+    boundaries: list[TopologySpan] = []
+    subtrees: dict[str, tuple[str, ...]] = {}
+    for span in sorted(spans, key=lambda item: (item.parent_pole_id or "", item.child_pole_id)):
         if span.parent_pole_id is None:
             continue
         parent = poles[span.parent_pole_id]
@@ -147,8 +145,36 @@ def _build_span_candidates(
             continue
         if child.state != PoleStatus.DARK or child.state_received_at is None:
             continue
-        subtree_ids = _collect_subtree(span.child_pole_id, children)
-        candidate = _build_candidate(snapshot, span, poles, subtree_ids)
+        boundaries.append(span)
+        subtrees[span.child_pole_id] = _collect_subtree(span.child_pole_id, children)
+
+    assigned_dark: dict[str, list[str]] = defaultdict(list)
+    for pole in sorted(poles.values(), key=lambda item: item.pole_id):
+        if pole.state != PoleStatus.DARK:
+            continue
+        containing_boundaries = tuple(
+            boundary for boundary in boundaries if pole.pole_id in subtrees[boundary.child_pole_id]
+        )
+        if not containing_boundaries:
+            continue
+        nearest = min(
+            containing_boundaries,
+            key=lambda boundary: (
+                len(subtrees[boundary.child_pole_id]),
+                boundary.child_pole_id,
+            ),
+        )
+        assigned_dark[nearest.child_pole_id].append(pole.pole_id)
+
+    for span in boundaries:
+        subtree_ids = subtrees[span.child_pole_id]
+        candidate = _build_candidate(
+            snapshot,
+            span,
+            poles,
+            subtree_ids,
+            tuple(assigned_dark[span.child_pole_id]),
+        )
         candidates.append(
             _classify_span_candidate(
                 snapshot,
@@ -604,6 +630,7 @@ def _build_candidate(
     boundary: TopologySpan,
     poles: dict[str, PoleEvidence],
     subtree_ids: tuple[str, ...],
+    assigned_dark_ids: tuple[str, ...],
 ) -> FaultCandidate:
     assert boundary.parent_pole_id is not None
     parent = poles[boundary.parent_pole_id]
@@ -615,7 +642,12 @@ def _build_candidate(
     observable = tuple(
         pole for pole in subtree if pole.device is not None and pole.state != PoleStatus.NO_DEVICE
     )
-    dark = tuple(pole for pole in observable if pole.state == PoleStatus.DARK)
+    assigned_dark = set(assigned_dark_ids)
+    dark = tuple(
+        pole
+        for pole in observable
+        if pole.state == PoleStatus.DARK and pole.pole_id in assigned_dark
+    )
     contradictions = tuple(
         sorted(
             pole.pole_id

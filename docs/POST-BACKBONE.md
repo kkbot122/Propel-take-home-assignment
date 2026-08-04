@@ -24,7 +24,7 @@ Optimize in this order:
 
 - [x] PB-01 — Sensor anomaly and scheduled-outage suppression
 - [x] PB-02 — DT and feeder fault classification
-- [ ] PB-03 — Multiple simultaneous surveyed faults
+- [x] PB-03 — Multiple simultaneous surveyed faults
 - [ ] PB-04 — Missing-device corridors and degraded precision
 - [ ] PB-05 — Unknown-topology inference and localization
 - [ ] PB-06 — Confidence scoring and evidence calibration
@@ -171,30 +171,30 @@ independent roots or duplicating overlapping symptoms.
 
 ### Implementation
 
-- [ ] Generalize surveyed-tree traversal to return every independent boundary.
-- [ ] Assign each dark observation to the nearest retained root candidate.
-- [ ] Prevent one pole from inflating multiple affected-pole sets.
-- [ ] Apply DT/feeder precedence per contained subtree, not globally.
-- [ ] Define deterministic ordering for multiple returned candidates.
-- [ ] Extend incident persistence for concurrent independent fingerprints.
-- [ ] Extend simulator state to support multiple active faults on valid independent scopes.
-- [ ] Define injection conflicts for overlapping span, DT, and feeder targets.
-- [ ] Ensure repair and restoration close only the matching ticket.
-- [ ] Update the console to select and work multiple active incidents independently.
+- [x] Generalize surveyed-tree traversal to return every independent boundary.
+- [x] Assign each dark observation to the nearest retained root candidate.
+- [x] Prevent one pole from inflating multiple affected-pole sets.
+- [x] Apply DT/feeder precedence per contained subtree, not globally.
+- [x] Define deterministic ordering for multiple returned candidates.
+- [x] Extend incident persistence for concurrent independent fingerprints.
+- [x] Extend simulator state to support multiple active faults on valid independent scopes.
+- [x] Define injection conflicts for overlapping span, DT, and feeder targets.
+- [x] Ensure repair and restoration close only the matching ticket.
+- [x] Update the console to select and work multiple active incidents independently.
 
 ### Required tests
 
-- [ ] Two independent live-to-dark boundaries produce two incidents.
-- [ ] Many dark poles below each boundary still produce only two incidents.
-- [ ] Nested boundaries collapse according to precedence.
-- [ ] Two simultaneous persistence calls do not merge or duplicate incidents.
-- [ ] Repairing one fault leaves the other ticket active and dark.
-- [ ] Restoration telemetry closes only the repaired ticket.
-- [ ] Selection keeps list, map, evidence, and ticket actions synchronized.
+- [x] Two independent live-to-dark boundaries produce two incidents.
+- [x] Many dark poles below each boundary still produce only two incidents.
+- [x] Nested boundaries collapse according to precedence.
+- [x] Two simultaneous persistence calls do not merge or duplicate incidents.
+- [x] Repairing one fault leaves the other ticket active and dark.
+- [x] Restoration telemetry closes only the repaired ticket.
+- [x] Selection keeps list, map, evidence, and ticket actions synchronized.
 
 ### Exit condition
 
-- [ ] Independent surveyed roots remain separate through localization, incident
+- [x] Independent surveyed roots remain separate through localization, incident
       grouping, operator actions, and restoration.
 
 ---

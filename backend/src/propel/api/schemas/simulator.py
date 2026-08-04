@@ -11,9 +11,10 @@ class InjectFixedFaultRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fault_type: SimulatorFaultType = SimulatorFaultType.SPAN_FAULT
-    dt_id: Literal["DT-001"] = "DT-001"
-    parent_pole_id: Literal["P-001"] = "P-001"
-    child_pole_id: Literal["P-002"] = "P-002"
+    feeder_id: Literal["FDR-001"] = "FDR-001"
+    dt_id: Literal["DT-001", "DT-002"] = "DT-001"
+    parent_pole_id: Literal["P-001", "P-101"] = "P-001"
+    child_pole_id: Literal["P-002", "P-102"] = "P-002"
 
 
 class SimulatedFaultResponse(BaseModel):

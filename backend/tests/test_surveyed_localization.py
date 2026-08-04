@@ -177,6 +177,47 @@ def test_loss_event_order_does_not_change_final_candidate() -> None:
     )
 
 
+def test_independent_surveyed_boundaries_return_disjoint_ordered_candidates() -> None:
+    poles = (
+        pole(1, PoleStatus.LIVE, ANALYSIS_AT - timedelta(seconds=20)),
+        pole(2, PoleStatus.DARK, ONSET_AT),
+        pole(3, PoleStatus.DARK, ONSET_AT + timedelta(seconds=1)),
+        pole(4, PoleStatus.DARK, ONSET_AT + timedelta(seconds=2)),
+        pole(5, PoleStatus.DARK, ONSET_AT + timedelta(seconds=3)),
+    )
+    spans = (
+        TopologySpan(None, "P-001", TopologySource.SURVEYED, 1.0),
+        TopologySpan("P-001", "P-002", TopologySource.SURVEYED, 1.0),
+        TopologySpan("P-002", "P-003", TopologySource.SURVEYED, 1.0),
+        TopologySpan("P-001", "P-004", TopologySource.SURVEYED, 1.0),
+        TopologySpan("P-004", "P-005", TopologySource.SURVEYED, 1.0),
+    )
+    snapshot = NetworkSnapshot(
+        dt_id="DT-001",
+        feeder_id="FDR-001",
+        topology_version=1,
+        analysis_at=ANALYSIS_AT,
+        poles=poles,
+        spans=spans,
+    )
+
+    candidates = localize_known_topology(snapshot)
+    reversed_candidates = localize_known_topology(
+        replace(snapshot, poles=tuple(reversed(poles)), spans=tuple(reversed(spans)))
+    )
+
+    assert candidates == reversed_candidates
+    assert [candidate.suspected_asset_id for candidate in candidates] == [
+        "P-001->P-002",
+        "P-001->P-004",
+    ]
+    assert [candidate.affected_pole_ids for candidate in candidates] == [
+        ("P-002", "P-003"),
+        ("P-004", "P-005"),
+    ]
+    assert set(candidates[0].affected_pole_ids).isdisjoint(candidates[1].affected_pole_ids)
+
+
 def test_post_onset_live_descendant_is_a_contradiction() -> None:
     snapshot = linear_snapshot(
         (

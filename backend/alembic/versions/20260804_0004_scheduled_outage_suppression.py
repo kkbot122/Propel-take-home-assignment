@@ -62,18 +62,13 @@ def upgrade() -> None:
         ["scope", "scope_id", "starts_at", "ends_at"],
     )
 
-    op.drop_constraint(
-        op.f("ck_incidents_suspected_asset_type"), "incidents", type_="check"
-    )
+    op.drop_constraint(op.f("ck_incidents_suspected_asset_type"), "incidents", type_="check")
     op.create_check_constraint(
         "suspected_asset_type",
         "incidents",
-        "suspected_asset_type IN "
-        "('DEVICE', 'SPAN', 'DISTRIBUTION_TRANSFORMER', 'FEEDER')",
+        "suspected_asset_type IN ('DEVICE', 'SPAN', 'DISTRIBUTION_TRANSFORMER', 'FEEDER')",
     )
-    op.drop_constraint(
-        op.f("ck_incidents_localization_precision"), "incidents", type_="check"
-    )
+    op.drop_constraint(op.f("ck_incidents_localization_precision"), "incidents", type_="check")
     op.create_check_constraint(
         "localization_precision",
         "incidents",
@@ -119,18 +114,13 @@ def downgrade() -> None:
     op.drop_column("incidents", "suppression_source")
     op.drop_column("incidents", "suppression_reason")
 
-    op.drop_constraint(
-        op.f("ck_incidents_localization_precision"), "incidents", type_="check"
-    )
+    op.drop_constraint(op.f("ck_incidents_localization_precision"), "incidents", type_="check")
     op.create_check_constraint(
         "localization_precision",
         "incidents",
-        "precision IN "
-        "('EXACT_SPAN', 'PROBABLE_SPAN', 'CORRIDOR', 'DT_LEVEL', 'FEEDER_LEVEL')",
+        "precision IN ('EXACT_SPAN', 'PROBABLE_SPAN', 'CORRIDOR', 'DT_LEVEL', 'FEEDER_LEVEL')",
     )
-    op.drop_constraint(
-        op.f("ck_incidents_suspected_asset_type"), "incidents", type_="check"
-    )
+    op.drop_constraint(op.f("ck_incidents_suspected_asset_type"), "incidents", type_="check")
     op.create_check_constraint(
         "suspected_asset_type",
         "incidents",

@@ -2,13 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 
 import { api, errorMessage } from './api/client'
-import type { Incident, SimulatedFault, Ticket } from './api/types'
+import type { Incident, InjectFaultRequest, SimulatedFault, Ticket } from './api/types'
 import { IncidentDetail } from './components/IncidentDetail'
 import { IncidentList } from './components/IncidentList'
 import { NetworkMap } from './components/NetworkMap'
 
 const POLL_INTERVAL_MS = 5_000
-const ACTIVE_FAULT_STORAGE_KEY = 'propel-active-simulator-fault'
+const ACTIVE_FAULTS_STORAGE_KEY = 'propel-active-simulator-faults'
 
 type TicketCommand =
   | { action: 'acknowledge'; ticketId: string }
@@ -16,7 +16,7 @@ type TicketCommand =
   | { action: 'resolve'; ticketId: string }
 
 type SimulatorCommand =
-  | { action: 'inject'; faultType: SimulatedFault['fault_type'] }
+  | { action: 'inject'; request: InjectFaultRequest }
   | { action: 'repair'; faultId: string }
   | { action: 'reset' }
 
@@ -38,12 +38,28 @@ function lastRefreshLabel(timestamp: number): string {
   }).format(new Date(timestamp))
 }
 
+function storedActiveFaults(): SimulatedFault[] {
+  try {
+    const stored = sessionStorage.getItem(ACTIVE_FAULTS_STORAGE_KEY)
+    return stored ? (JSON.parse(stored) as SimulatedFault[]) : []
+  } catch {
+    return []
+  }
+}
+
+function faultAssetId(fault: SimulatedFault): string | null {
+  if (fault.fault_type === 'SPAN_FAULT') {
+    return fault.parent_pole_id && fault.child_pole_id
+      ? `${fault.parent_pole_id}->${fault.child_pole_id}`
+      : null
+  }
+  return fault.fault_type === 'DT_FAULT' ? fault.dt_id : fault.feeder_id
+}
+
 export function App() {
   const queryClient = useQueryClient()
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null)
-  const [activeFaultId, setActiveFaultId] = useState<string | null>(() =>
-    sessionStorage.getItem(ACTIVE_FAULT_STORAGE_KEY),
-  )
+  const [activeFaults, setActiveFaults] = useState<SimulatedFault[]>(storedActiveFaults)
   const [commandMessage, setCommandMessage] = useState<string | null>(null)
 
   const healthQuery = useQuery({
@@ -102,6 +118,9 @@ export function App() {
     [effectiveSelectedIncidentId, incidents],
   )
   const selectedIncident: Incident | null = incidentQuery.data ?? selectedSummary
+  const selectedSimulatorFault =
+    activeFaults.find((fault) => faultAssetId(fault) === selectedIncident?.suspected_asset_id) ??
+    null
   const selectedTicketId = selectedIncident?.ticket_id ?? null
   const ticketQuery = useQuery({
     queryKey: ['ticket', selectedTicketId],
@@ -139,7 +158,7 @@ export function App() {
 
   const simulatorMutation = useMutation<SimulatorResult, Error, SimulatorCommand>({
     mutationFn: (command: SimulatorCommand) => {
-      if (command.action === 'inject') return api.injectFault(command.faultType)
+      if (command.action === 'inject') return api.injectFault(command.request)
       if (command.action === 'repair') return api.repairFault(command.faultId)
       return api.resetSimulator()
     },
@@ -148,18 +167,24 @@ export function App() {
     },
     onSuccess: (result, command) => {
       if (command.action === 'inject' && 'fault_id' in result) {
-        setActiveFaultId(result.fault_id)
-        sessionStorage.setItem(ACTIVE_FAULT_STORAGE_KEY, result.fault_id)
+        setActiveFaults((current) => {
+          const updated = [...current.filter((fault) => fault.fault_id !== result.fault_id), result]
+          sessionStorage.setItem(ACTIVE_FAULTS_STORAGE_KEY, JSON.stringify(updated))
+          return updated
+        })
         setCommandMessage(
           `${result.fault_type.replaceAll('_', ' ')} injected. Waiting for telemetry correlation and localization.`,
         )
       } else if (command.action === 'repair') {
-        setActiveFaultId(null)
-        sessionStorage.removeItem(ACTIVE_FAULT_STORAGE_KEY)
+        setActiveFaults((current) => {
+          const updated = current.filter((fault) => fault.fault_id !== command.faultId)
+          sessionStorage.setItem(ACTIVE_FAULTS_STORAGE_KEY, JSON.stringify(updated))
+          return updated
+        })
         setCommandMessage('Repair telemetry sent. Waiting for the 10-second verification window.')
       } else {
-        setActiveFaultId(null)
-        sessionStorage.removeItem(ACTIVE_FAULT_STORAGE_KEY)
+        setActiveFaults([])
+        sessionStorage.removeItem(ACTIVE_FAULTS_STORAGE_KEY)
         setCommandMessage('Simulator reset requested. Active faults are restoring through telemetry.')
       }
       void refreshOperationalData()
@@ -236,21 +261,68 @@ export function App() {
             className="inject-button"
             onClick={() => {
               setSelectedIncidentId(null)
-              simulatorMutation.mutate({ action: 'inject', faultType: 'SPAN_FAULT' })
+              simulatorMutation.mutate({
+                action: 'inject',
+                request: {
+                  fault_type: 'SPAN_FAULT',
+                  dt_id: 'DT-001',
+                  parent_pole_id: 'P-001',
+                  child_pole_id: 'P-002',
+                },
+              })
             }}
-            disabled={operationPending || activeFaultId !== null || activeIncidents.length > 0}
+            disabled={
+              operationPending ||
+              activeFaults.some((fault) =>
+                fault.deenergized_pole_ids.some((poleId) =>
+                  ['P-002', 'P-003', 'P-004'].includes(poleId),
+                ),
+              )
+            }
           >
             <span aria-hidden="true">⚡</span>
-            Inject span fault
+            Inject span fault A
           </button>
           <button
             type="button"
             className="inject-button"
             onClick={() => {
               setSelectedIncidentId(null)
-              simulatorMutation.mutate({ action: 'inject', faultType: 'DT_FAULT' })
+              simulatorMutation.mutate({
+                action: 'inject',
+                request: {
+                  fault_type: 'SPAN_FAULT',
+                  dt_id: 'DT-002',
+                  parent_pole_id: 'P-101',
+                  child_pole_id: 'P-102',
+                },
+              })
             }}
-            disabled={operationPending || activeFaultId !== null || activeIncidents.length > 0}
+            disabled={
+              operationPending ||
+              activeFaults.some((fault) => fault.deenergized_pole_ids.includes('P-102'))
+            }
+          >
+            Inject span fault B
+          </button>
+          <button
+            type="button"
+            className="inject-button"
+            onClick={() => {
+              setSelectedIncidentId(null)
+              simulatorMutation.mutate({
+                action: 'inject',
+                request: { fault_type: 'DT_FAULT', dt_id: 'DT-001' },
+              })
+            }}
+            disabled={
+              operationPending ||
+              activeFaults.some((fault) =>
+                fault.deenergized_pole_ids.some((poleId) =>
+                  ['P-001', 'P-002', 'P-003', 'P-004'].includes(poleId),
+                ),
+              )
+            }
           >
             Inject DT fault
           </button>
@@ -259,9 +331,12 @@ export function App() {
             className="inject-button"
             onClick={() => {
               setSelectedIncidentId(null)
-              simulatorMutation.mutate({ action: 'inject', faultType: 'FEEDER_FAULT' })
+              simulatorMutation.mutate({
+                action: 'inject',
+                request: { fault_type: 'FEEDER_FAULT', feeder_id: 'FDR-001' },
+              })
             }}
-            disabled={operationPending || activeFaultId !== null || activeIncidents.length > 0}
+            disabled={operationPending || activeFaults.length > 0}
           >
             Inject feeder fault
           </button>
@@ -269,14 +344,19 @@ export function App() {
             type="button"
             className="repair-button"
             onClick={() => {
-              if (activeFaultId) {
+              if (selectedSimulatorFault) {
                 setSelectedIncidentId(selectedIncident?.incident_id ?? null)
-                simulatorMutation.mutate({ action: 'repair', faultId: activeFaultId })
+                simulatorMutation.mutate({
+                  action: 'repair',
+                  faultId: selectedSimulatorFault.fault_id,
+                })
               }
             }}
-            disabled={operationPending || activeFaultId === null || ticketStatus !== 'RESOLVED'}
+            disabled={
+              operationPending || selectedSimulatorFault === null || ticketStatus !== 'RESOLVED'
+            }
           >
-            Send repair telemetry
+            Send selected repair telemetry
           </button>
           <button
             type="button"
@@ -371,7 +451,7 @@ export function App() {
       </section>
 
       <footer className="app-footer">
-        <span>Propel · PB-02 span, DT, and feeder classification</span>
+        <span>Propel · PB-03 simultaneous surveyed faults</span>
         <span>Polling every 5 seconds · verification remains telemetry-only</span>
       </footer>
     </main>

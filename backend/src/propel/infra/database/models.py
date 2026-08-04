@@ -533,9 +533,8 @@ class SimulatedFault(Base):
     __tablename__ = "simulated_faults"
     __table_args__ = (
         Index(
-            "uq_simulated_faults_single_active",
+            "ix_simulated_faults_active_status",
             "status",
-            unique=True,
             postgresql_where=text("status = 'ACTIVE'"),
         ),
         CheckConstraint(
@@ -559,8 +558,8 @@ class SimulatedFault(Base):
     dt_id: Mapped[int | None] = mapped_column(
         ForeignKey("distribution_transformers.id", ondelete="RESTRICT")
     )
-    parent_pole_id: Mapped[int] = mapped_column(ForeignKey("poles.id", ondelete="RESTRICT"))
-    child_pole_id: Mapped[int] = mapped_column(ForeignKey("poles.id", ondelete="RESTRICT"))
+    parent_pole_id: Mapped[int | None] = mapped_column(ForeignKey("poles.id", ondelete="RESTRICT"))
+    child_pole_id: Mapped[int | None] = mapped_column(ForeignKey("poles.id", ondelete="RESTRICT"))
     status: Mapped[SimulatorFaultStatus] = mapped_column(
         text_enum(SimulatorFaultStatus, "simulator_fault_status"), nullable=False
     )

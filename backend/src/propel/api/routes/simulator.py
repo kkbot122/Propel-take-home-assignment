@@ -57,12 +57,13 @@ async def inject_fault(
             dt_id=payload.dt_id,
             parent_pole_id=payload.parent_pole_id,
             child_pole_id=payload.child_pole_id,
+            feeder_id=payload.feeder_id,
         )
     except ActiveSimulatorFaultError:
         return error_response(
             status.HTTP_409_CONFLICT,
-            "ACTIVE_SIMULATOR_FAULT",
-            "the transformer already has an active simulated fault",
+            "SIMULATOR_FAULT_OVERLAP",
+            "the requested scope overlaps an active simulated fault",
             retryable=False,
         )
     except InvalidSimulatorSpanError:

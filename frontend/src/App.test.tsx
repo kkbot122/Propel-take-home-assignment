@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from './App'
@@ -87,6 +87,18 @@ const suppressedIncident: Incident = {
   suppression_external_id: null,
   ticket_id: null,
   ticket_status: null,
+}
+
+const secondIncident: Incident = {
+  ...incident,
+  incident_id: 'incident-2',
+  fingerprint: 'span:DT-002:P-101->P-102',
+  suspected_asset_id: 'P-101->P-102',
+  latitude: 12.89031,
+  longitude: 77.58522,
+  affected_pole_count: 1,
+  affected_pole_ids: ['P-102'],
+  ticket_id: 'ticket-2',
 }
 
 const ticket: Ticket = {
@@ -184,8 +196,12 @@ function installFetchRouter(options?: {
       return jsonResponse(options?.suppressedIncidents ?? [])
     }
     if (url === '/api/incidents/incident-1') return jsonResponse(incident)
+    if (url === '/api/incidents/incident-2') return jsonResponse(secondIncident)
     if (url === '/api/incidents/incident-suppressed') return jsonResponse(suppressedIncident)
     if (url === '/api/tickets/ticket-1' && init?.method !== 'POST') return jsonResponse(ticket)
+    if (url === '/api/tickets/ticket-2' && init?.method !== 'POST') {
+      return jsonResponse({ ...ticket, ticket_id: 'ticket-2', incident_id: 'incident-2' })
+    }
     if (url === '/api/tickets/ticket-1/acknowledge') {
       return jsonResponse({
         ...ticket,
@@ -210,17 +226,23 @@ function installFetchRouter(options?: {
       return jsonResponse({ ...topology, dt_id: 'DT-002', spans: [] })
     }
     if (url === '/api/simulator/faults') {
-      const payload = JSON.parse(String(init?.body)) as { fault_type: string }
+      const payload = JSON.parse(String(init?.body)) as {
+        fault_type: string
+        dt_id?: string
+        parent_pole_id?: string
+        child_pole_id?: string
+      }
+      const secondSpan = payload.dt_id === 'DT-002'
       return jsonResponse(
         {
-          fault_id: 'fault-1',
+          fault_id: secondSpan ? 'fault-2' : 'fault-1',
           fault_type: payload.fault_type,
           feeder_id: 'FDR-001',
-          dt_id: payload.fault_type === 'FEEDER_FAULT' ? null : 'DT-001',
-          parent_pole_id: null,
-          child_pole_id: null,
+          dt_id: payload.fault_type === 'FEEDER_FAULT' ? null : (payload.dt_id ?? 'DT-001'),
+          parent_pole_id: payload.fault_type === 'SPAN_FAULT' ? payload.parent_pole_id : null,
+          child_pole_id: payload.fault_type === 'SPAN_FAULT' ? payload.child_pole_id : null,
           status: 'ACTIVE',
-          deenergized_pole_ids: ['P-001'],
+          deenergized_pole_ids: secondSpan ? ['P-102'] : ['P-002', 'P-003', 'P-004'],
           injected_at: '2026-08-04T01:00:00Z',
           injection_telemetry_at: '2026-08-04T01:00:00Z',
           repaired_at: null,
@@ -274,7 +296,7 @@ describe('App', () => {
     expect(await screen.findByRole('button', { name: 'Acknowledge incident' })).toBeEnabled()
     expect(screen.queryByRole('button', { name: 'Assign crew' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Claim physical repair' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Send repair telemetry' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send selected repair telemetry' })).toBeDisabled()
   })
 
   it('applies a valid ticket action and refreshes server state', async () => {
@@ -309,7 +331,8 @@ describe('App', () => {
 
     expect(await screen.findByRole('heading', { name: 'No active outages' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'No incident selected' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Inject span fault' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Inject span fault A' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Inject span fault B' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Inject DT fault' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Inject feeder fault' })).toBeEnabled()
     expect(screen.getByText(/Last refresh/)).toBeInTheDocument()
@@ -325,7 +348,7 @@ describe('App', () => {
     expect(screen.getByText('No dispatch ticket created')).toBeInTheDocument()
     expect(screen.getByText(/telemetry-consistency-rule/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Acknowledge incident' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Inject span fault' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Inject span fault A' })).toBeEnabled()
   })
 
   it('sends the selected feeder-fault scenario through the simulator API', async () => {
@@ -339,9 +362,53 @@ describe('App', () => {
       '/api/simulator/faults',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ fault_type: 'FEEDER_FAULT' }),
+        body: JSON.stringify({ fault_type: 'FEEDER_FAULT', feeder_id: 'FDR-001' }),
       }),
     )
+  })
+
+  it('allows two independent span faults and retains both simulator identities', async () => {
+    const fetchMock = installFetchRouter({ incidents: [] })
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Inject span fault A' }))
+    expect(await screen.findByText(/SPAN FAULT injected/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inject span fault A' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Inject span fault B' })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inject span fault B' }))
+    expect(screen.getByRole('button', { name: 'Inject feeder fault' })).toBeDisabled()
+    await waitFor(() =>
+      expect(
+        JSON.parse(sessionStorage.getItem('propel-active-simulator-faults') ?? '[]'),
+      ).toHaveLength(2),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/simulator/faults',
+      expect.objectContaining({
+        body: JSON.stringify({
+          fault_type: 'SPAN_FAULT',
+          dt_id: 'DT-002',
+          parent_pole_id: 'P-101',
+          child_pole_id: 'P-102',
+        }),
+      }),
+    )
+  })
+
+  it('keeps list, map, evidence, and ticket selection synchronized across incidents', async () => {
+    installFetchRouter({ incidents: [incident, secondIncident] })
+    renderApp()
+
+    expect(await screen.findByTestId('network-map')).toHaveTextContent('P-001->P-002')
+    const secondCardLabel = await screen.findByText('P-101 → P-102')
+    fireEvent.click(secondCardLabel.closest('button') as HTMLButtonElement)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('network-map')).toHaveTextContent('P-101->P-102'),
+    )
+    expect(screen.getByRole('heading', { name: 'P-101 → P-102' })).toBeInTheDocument()
+    expect(screen.getByText('P-102')).toBeInTheDocument()
   })
 
   it('presents backend health failure instead of claiming data is current', async () => {

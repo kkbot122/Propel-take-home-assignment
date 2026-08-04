@@ -94,10 +94,12 @@ class PostgresIncidentService:
     async def persist_candidates(
         self, candidates: Sequence[FaultCandidate]
     ) -> list[IncidentTicketReference]:
+        ordered_candidates = tuple(sorted(candidates, key=incident_fingerprint))
         try:
             async with self._session_factory.begin() as session:
                 references = [
-                    await self._persist_candidate(session, candidate) for candidate in candidates
+                    await self._persist_candidate(session, candidate)
+                    for candidate in ordered_candidates
                 ]
         except SQLAlchemyError as error:
             raise IncidentStoreUnavailableError from error

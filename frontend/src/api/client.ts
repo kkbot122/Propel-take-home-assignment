@@ -1,6 +1,7 @@
 import type {
   ApiErrorBody,
   HealthResponse,
+  InjectFaultRequest,
   Incident,
   NetworkOverview,
   NetworkPole,
@@ -85,10 +86,10 @@ export const api = {
         reason: 'Crew reports physical repair complete',
       }),
     }),
-  injectFault: (faultType: SimulatedFault['fault_type']) =>
+  injectFault: (request: InjectFaultRequest) =>
     requestJson<SimulatedFault>('/api/simulator/faults', {
       method: 'POST',
-      body: JSON.stringify({ fault_type: faultType }),
+      body: JSON.stringify(request),
     }),
   repairFault: (faultId: string) =>
     requestJson<SimulatedFault>(`/api/simulator/faults/${faultId}/repair`, {

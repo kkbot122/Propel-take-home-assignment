@@ -299,6 +299,25 @@ so concurrent cycles and repeated repair calls cannot duplicate closure.
 `pole_states`, erasing operational history during reset, manual verification,
 and treating `boot` as proof of restored power.
 
+## 2026-08-04 — Allow independent simulated faults and reject overlap
+
+**Chosen:** The simulator may keep multiple `ACTIVE` fault rows when their
+de-energized pole sets are disjoint. Injection transactions take one PostgreSQL
+transaction-level advisory lock before reading active scopes, which closes the
+zero-row concurrency race. Any requested span, DT, or feeder scope that shares
+a pole with an active fault returns `SIMULATOR_FAULT_OVERLAP`; nested or duplicate
+physical faults are not injected.
+
+Localization assigns each dark observation to its nearest retained surveyed
+boundary. Incident batches are persisted in canonical fingerprint order so
+concurrent writers cannot invert index-lock order. Repair telemetry is emitted
+only for the selected simulated fault, and restoration verification evaluates
+only that ticket's frozen pole set.
+
+**Rejected:** A global single-active-fault constraint, permitting overlapping
+physical scopes, merging independent roots into one ticket, and repairing every
+active fault when an operator works one incident.
+
 ## 2026-08-04 — Persist suppression without creating dispatch tickets
 
 **Chosen:** A scheduled outage is an immutable domain window with a unique

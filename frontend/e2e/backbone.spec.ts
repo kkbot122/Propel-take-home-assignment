@@ -16,7 +16,7 @@ test('operator completes the surveyed-span backbone workflow', async ({ page, re
   await expect(page.getByText('DT-002', { exact: true })).toBeVisible()
 
   const faultStartedAt = Date.now()
-  await page.getByRole('button', { name: 'Inject span fault' }).click()
+  await page.getByRole('button', { name: 'Inject span fault A' }).click()
   await expect(
     page.getByText('SPAN FAULT injected. Waiting for telemetry correlation and localization.'),
   ).toBeVisible()
@@ -73,7 +73,7 @@ test('operator completes the surveyed-span backbone workflow', async ({ page, re
   await expect(detail.getByRole('button', { name: 'Close ticket' })).toHaveCount(0)
 
   const restorationStartedAt = Date.now()
-  await page.getByRole('button', { name: 'Send repair telemetry' }).click()
+  await page.getByRole('button', { name: 'Send selected repair telemetry' }).click()
   await expect(detail.locator('.detail-header .status-pill')).toHaveText('CLOSED', {
     timeout: 45_000,
   })
