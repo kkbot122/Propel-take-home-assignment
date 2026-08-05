@@ -194,3 +194,47 @@ def test_fixed_scenarios_cover_faults_uncertainty_and_restoration() -> None:
     assert len(generate_restoration_telemetry(network, complete, occurred_at)) == (
         2 * complete_loss_count
     )
+
+
+def test_complete_span_scenarios_deliver_one_contiguous_observation_per_fault() -> None:
+    network = generate_network()
+    scenarios = {item.scenario_id: item for item in network.scenarios}
+    children: dict[str, list[str]] = {}
+    for edge in network.ground_truth_edges:
+        if edge.parent_pole_id is not None:
+            children.setdefault(edge.parent_pole_id, []).append(edge.child_pole_id)
+
+    def subtree(root_id: str) -> set[str]:
+        result: set[str] = set()
+        pending = [root_id]
+        while pending:
+            pole_id = pending.pop()
+            result.add(pole_id)
+            pending.extend(children.get(pole_id, ()))
+        return result
+
+    occurred_at = datetime(2026, 8, 4, 10, 3, tzinfo=UTC)
+    for scenario_id, expected_fault_count in (
+        ("surveyed-span", 1),
+        ("scheduled-span", 1),
+        ("simultaneous-spans", 3),
+    ):
+        scenario = scenarios[scenario_id]
+        assert scenario.complete_delivery
+        assert len(scenario.faults) == expected_fault_count
+        expected_dark = {
+            pole_id for fault in scenario.faults for pole_id in subtree(str(fault.child_pole_id))
+        }
+        delivered_dark = {
+            item.command.pole_id
+            for item in generate_fault_telemetry(
+                network,
+                scenario,
+                occurred_at,
+                power_loss_delivery_ratio=0.01,
+            )
+            if item.command.event == TelemetryEventType.POWER_LOST
+        }
+        assert delivered_dark == expected_dark
+
+    assert not scenarios["noisy-span"].complete_delivery

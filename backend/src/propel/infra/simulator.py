@@ -196,6 +196,7 @@ class PostgresSimulatorService:
         duplicate_loss_pole_ids: tuple[str, ...] = (),
         delayed_loss_pole_ids: tuple[str, ...] = (),
         out_of_order_pole_ids: tuple[str, ...] = (),
+        force_loss_delivery: bool = False,
     ) -> SimulatedFaultView:
         injected_at = self._clock()
         no_telemetry = False
@@ -280,6 +281,7 @@ class PostgresSimulatorService:
                     duplicate_loss_pole_ids=duplicate_loss_pole_ids,
                     delayed_loss_pole_ids=delayed_loss_pole_ids,
                     out_of_order_pole_ids=out_of_order_pole_ids,
+                    force_loss_delivery=force_loss_delivery,
                 )
                 receipts = await self._emit_all(
                     commands,
@@ -354,6 +356,7 @@ class PostgresSimulatorService:
             raise SimulatorScenarioNotFoundError
         raw_noise = scenario.get("noise")
         noise: dict[str, Any] = raw_noise if isinstance(raw_noise, dict) else {}
+        force_loss_delivery = bool(scenario.get("complete_delivery", False))
         faults: list[SimulatedFaultView] = []
         for raw_fault in raw_faults:
             if not isinstance(raw_fault, dict):
@@ -369,6 +372,7 @@ class PostgresSimulatorService:
                 duplicate_loss_pole_ids=tuple(noise.get("duplicate_pole_ids", ())),
                 delayed_loss_pole_ids=tuple(noise.get("delayed_pole_ids", ())),
                 out_of_order_pole_ids=tuple(noise.get("out_of_order_pole_ids", ())),
+                force_loss_delivery=force_loss_delivery,
             )
             faults.append(fault)
 
@@ -955,6 +959,7 @@ class PostgresSimulatorService:
         duplicate_loss_pole_ids: tuple[str, ...] = (),
         delayed_loss_pole_ids: tuple[str, ...] = (),
         out_of_order_pole_ids: tuple[str, ...] = (),
+        force_loss_delivery: bool = False,
     ) -> tuple[TelemetryCommand, ...]:
         pole_ids = ((parent_pole_id,) if parent_pole_id is not None else ()) + affected_ids
         rows = await self._device_rows(session, pole_ids)
@@ -995,6 +1000,7 @@ class PostgresSimulatorService:
             if (
                 is_affected
                 and pole_id not in forced_delivery_ids
+                and not force_loss_delivery
                 and not power_loss_delivery_succeeds(
                     pole_id,
                     context=loss_delivery_context,
@@ -1145,6 +1151,7 @@ class PostgresSimulatorService:
         duplicate_loss_pole_ids: tuple[str, ...] = (),
         delayed_loss_pole_ids: tuple[str, ...] = (),
         out_of_order_pole_ids: tuple[str, ...] = (),
+        force_loss_delivery: bool = False,
     ) -> SimulatedFaultView:
         if fault_type == SimulatorFaultType.SPAN_FAULT:
             return await self.inject_fixed_span_fault(
@@ -1156,6 +1163,7 @@ class PostgresSimulatorService:
                 duplicate_loss_pole_ids=duplicate_loss_pole_ids,
                 delayed_loss_pole_ids=delayed_loss_pole_ids,
                 out_of_order_pole_ids=out_of_order_pole_ids,
+                force_loss_delivery=force_loss_delivery,
             )
         return await self._inject_fixed_scope_fault(
             fault_type,

@@ -1,7 +1,7 @@
 # Simulator acceptance record
 
 Date: 2026-08-05  
-Environment: local Docker Compose, generated dataset `subdivision-v2`
+Environment: local Docker Compose, generated dataset `subdivision-v3`
 
 ## Reviewer entry point
 
@@ -21,10 +21,10 @@ available from `GET http://localhost:8000/api/simulator/scenarios`.
 
 | Reviewer self-check | Result | Evidence |
 | --- | --- | --- |
-| Span fault creates one correctly located ticket with PIN | Pass | Surveyed localization integration coverage asserts one exact-span candidate and persisted ticket; the console renders the incident PIN. |
-| Three simultaneous faults create three tickets | Pass | `test_three_independent_simulated_faults_create_three_tickets_and_repair_independently` asserts three disjoint candidates, fingerprints, and tickets. |
+| Span fault creates one correctly located ticket with PIN | Pass | A clean-stack `surveyed-span` run produced one `EXACT_SPAN` incident, one ticket, 13 affected poles, and PIN `560100`. The scenario now selects a fully observable subtree and delivers its complete deterministic evidence. |
+| Three simultaneous faults create three tickets | Pass | A clean-stack `simultaneous-spans` run produced exactly three disjoint span incidents and three tickets. Complete acceptance scenarios bypass stochastic loss-message delivery while the separate noisy scenario retains delivery loss. |
 | Powered device failure creates no outage ticket | Pass | A live `dead-sensor` run returned a failed device/pole and the console remained at zero findings; isolated-sensor integration coverage also asserts suppression without a ticket. |
-| Scheduled outage creates no dispatch ticket | Pass | Active-schedule integration coverage asserts a suppressed scheduled-outage incident without a ticket; `scheduled-span` creates the active window before analysis is due. |
+| Scheduled outage creates no dispatch ticket | Pass | A clean-stack `scheduled-span` run produced zero active incidents and one `SCHEDULED_OUTAGE` suppressed record with no ticket. |
 | Repair auto-verifies without a manual operator click | Pass | The three-fault test calls only the simulator repair endpoint, asserts simulator-crew audit transitions, then telemetry-only `VERIFIED` and `CLOSED`. |
 | Resolving while poles remain dark does not close the ticket | Pass | Restoration integration coverage leaves the ticket `RESOLVED` with `REPAIR_NOT_VERIFIED` and three remaining dark poles. |
 | Partial restoration remains open | Pass | The restoration test restores 50%, asserts one remaining dark pole and no verification, then closes only after full fresh restoration. |
@@ -32,11 +32,11 @@ available from `GET http://localhost:8000/api/simulator/scenarios`.
 
 ## Verification summary
 
-- Backend unit/domain tests: 119 passed.
-- Backend PostgreSQL/Redis/HTTP integration tests: 30 passed.
-- Frontend behavior tests: 16 passed.
+- Backend unit/domain and PostgreSQL/Redis/HTTP integration tests: 169 passed.
+- Frontend behavior tests: 18 passed.
 - Frontend TypeScript build and ESLint: passed.
 - Backend Ruff formatting and lint: passed.
+- Clean Playwright surveyed-span workflow: passed.
 - Live health: backend, PostgreSQL, and Redis healthy; worker lag, pending,
   analysis-due, and dead-letter counts all zero at the final check.
 - Live catalogue: nine scenarios returned and rendered in the operator console.

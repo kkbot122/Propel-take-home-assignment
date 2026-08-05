@@ -21,7 +21,7 @@ from propel.telemetry.ingestion import TelemetryCommand
 from propel.topology.inference import haversine_distance_m, infer_geographic_topology
 from propel.topology.models import TopologyPole, TopologyRequest
 
-GENERATOR_VERSION = "subdivision-v2"
+GENERATOR_VERSION = "subdivision-v3"
 EARTH_METRES_PER_DEGREE = 111_320.0
 
 
@@ -171,6 +171,7 @@ class GeneratedScenario:
     noise: ScenarioNoise = ScenarioNoise()
     restoration_fraction: float = 1.0
     scheduled: bool = False
+    complete_delivery: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,7 +411,8 @@ def generate_fault_telemetry(
             or not device.can_report_power_loss
             or pole_id in omitted
             or (
-                pole_id not in forced_delivery
+                not scenario.complete_delivery
+                and pole_id not in forced_delivery
                 and not power_loss_delivery_succeeds(
                     pole_id,
                     context=loss_delivery_context,
@@ -777,32 +779,43 @@ def _generate_scenarios(network: GeneratedNetwork) -> tuple[GeneratedScenario, .
         for device in network.devices
         if device.health_status == DeviceHealthStatus.HEALTHY and device.can_report_power_loss
     }
-    surveyed = next(item for item in network.transformers if item.surveyed)
-    inferred = next(item for item in network.transformers if not item.surveyed)
-    surveyed_edge = _scenario_edge(truth_by_dt[surveyed.dt_id], devices, surveyed.dt_id)
-    inferred_edge = _scenario_edge(truth_by_dt[inferred.dt_id], devices, inferred.dt_id)
+    surveyed, surveyed_edge = _select_scenario_transformer(
+        network.transformers,
+        truth_by_dt,
+        devices,
+        require_surveyed=True,
+        require_complete_subtree=True,
+    )
+    inferred, inferred_edge = _select_scenario_transformer(
+        network.transformers,
+        truth_by_dt,
+        devices,
+        require_surveyed=False,
+    )
+    noisy_edge = _scenario_edge(truth_by_dt[surveyed.dt_id], devices, surveyed.dt_id)
     feeder_transformers = tuple(
         item for item in network.transformers if item.feeder_id == surveyed.feeder_id
     )
-    second_surveyed = next(
-        (item for item in network.transformers if item.surveyed and item.dt_id != surveyed.dt_id),
-        inferred,
+    second_transformer, second_edge = _select_scenario_transformer(
+        network.transformers,
+        truth_by_dt,
+        devices,
+        excluded_dt_ids={surveyed.dt_id},
+        require_complete_subtree=True,
     )
-    second_edge = _scenario_edge(truth_by_dt[second_surveyed.dt_id], devices, second_surveyed.dt_id)
-    third_transformer = next(
-        item
-        for item in network.transformers
-        if item.dt_id not in {surveyed.dt_id, second_surveyed.dt_id}
-    )
-    third_edge = _scenario_edge(
-        truth_by_dt[third_transformer.dt_id], devices, third_transformer.dt_id
+    third_transformer, third_edge = _select_scenario_transformer(
+        network.transformers,
+        truth_by_dt,
+        devices,
+        excluded_dt_ids={surveyed.dt_id, second_transformer.dt_id},
+        require_complete_subtree=True,
     )
     children: defaultdict[str, list[str]] = defaultdict(list)
     for edge in truth_by_dt[surveyed.dt_id]:
         if edge.parent_pole_id is not None:
             children[edge.parent_pole_id].append(edge.child_pole_id)
     noisy_ids = tuple(
-        pole_id for pole_id in _subtree(surveyed_edge.child_pole_id, children) if pole_id in devices
+        pole_id for pole_id in _subtree(noisy_edge.child_pole_id, children) if pole_id in devices
     )[:4]
     return (
         GeneratedScenario(
@@ -816,6 +829,7 @@ def _generate_scenarios(network: GeneratedNetwork) -> tuple[GeneratedScenario, .
                     child_pole_id=surveyed_edge.child_pole_id,
                 ),
             ),
+            complete_delivery=True,
         ),
         GeneratedScenario(
             "inferred-span",
@@ -856,6 +870,7 @@ def _generate_scenarios(network: GeneratedNetwork) -> tuple[GeneratedScenario, .
                 ),
             ),
             scheduled=True,
+            complete_delivery=True,
         ),
         GeneratedScenario(
             "noisy-span",
@@ -864,8 +879,8 @@ def _generate_scenarios(network: GeneratedNetwork) -> tuple[GeneratedScenario, .
                 GeneratedFault(
                     SimulatorFaultType.SPAN_FAULT,
                     dt_id=surveyed.dt_id,
-                    parent_pole_id=surveyed_edge.parent_pole_id,
-                    child_pole_id=surveyed_edge.child_pole_id,
+                    parent_pole_id=noisy_edge.parent_pole_id,
+                    child_pole_id=noisy_edge.child_pole_id,
                 ),
             ),
             ScenarioNoise(
@@ -892,7 +907,7 @@ def _generate_scenarios(network: GeneratedNetwork) -> tuple[GeneratedScenario, .
                 ),
                 GeneratedFault(
                     SimulatorFaultType.SPAN_FAULT,
-                    dt_id=second_surveyed.dt_id,
+                    dt_id=second_transformer.dt_id,
                     parent_pole_id=second_edge.parent_pole_id,
                     child_pole_id=second_edge.child_pole_id,
                 ),
@@ -903,6 +918,7 @@ def _generate_scenarios(network: GeneratedNetwork) -> tuple[GeneratedScenario, .
                     child_pole_id=third_edge.child_pole_id,
                 ),
             ),
+            complete_delivery=True,
         ),
         GeneratedScenario(
             "partial-restoration",
@@ -954,18 +970,67 @@ def _scenario_edge(
     edges: list[GeneratedEdge],
     eligible_devices: dict[str, GeneratedDevice],
     dt_id: str,
+    *,
+    require_complete_subtree: bool = False,
 ) -> GeneratedEdge:
-    edge = next(
-        (
-            item
-            for item in edges
-            if item.parent_pole_id in eligible_devices and item.child_pole_id in eligible_devices
-        ),
-        None,
+    eligible_edges = tuple(
+        item
+        for item in edges
+        if item.parent_pole_id in eligible_devices and item.child_pole_id in eligible_devices
     )
+    if require_complete_subtree:
+        children: defaultdict[str, list[str]] = defaultdict(list)
+        for item in edges:
+            if item.parent_pole_id is not None:
+                children[item.parent_pole_id].append(item.child_pole_id)
+        complete_edges = tuple(
+            (item, _subtree(item.child_pole_id, children))
+            for item in eligible_edges
+            if all(
+                pole_id in eligible_devices for pole_id in _subtree(item.child_pole_id, children)
+            )
+        )
+        edge = (
+            min(
+                complete_edges,
+                key=lambda pair: (-len(pair[1]), pair[0].child_pole_id),
+            )[0]
+            if complete_edges
+            else None
+        )
+    else:
+        edge = next(iter(eligible_edges), None)
     if edge is None:
         raise ValueError(f"device configuration leaves {dt_id} without a usable scenario span")
     return edge
+
+
+def _select_scenario_transformer(
+    transformers: tuple[GeneratedTransformer, ...],
+    edges_by_dt: defaultdict[str, list[GeneratedEdge]],
+    eligible_devices: dict[str, GeneratedDevice],
+    *,
+    excluded_dt_ids: set[str] | None = None,
+    require_surveyed: bool | None = None,
+    require_complete_subtree: bool = False,
+) -> tuple[GeneratedTransformer, GeneratedEdge]:
+    excluded = excluded_dt_ids or set()
+    for transformer in transformers:
+        if transformer.dt_id in excluded:
+            continue
+        if require_surveyed is not None and transformer.surveyed != require_surveyed:
+            continue
+        try:
+            edge = _scenario_edge(
+                edges_by_dt[transformer.dt_id],
+                eligible_devices,
+                transformer.dt_id,
+                require_complete_subtree=require_complete_subtree,
+            )
+        except ValueError:
+            continue
+        return transformer, edge
+    raise ValueError("device configuration leaves no transformer with a usable scenario span")
 
 
 def _edges_by_dt(edges: tuple[GeneratedEdge, ...]) -> defaultdict[str, list[GeneratedEdge]]:
@@ -1021,6 +1086,7 @@ def _scenario_dict(scenario: GeneratedScenario) -> dict[str, object]:
         "noise": asdict(scenario.noise),
         "restoration_fraction": scenario.restoration_fraction,
         "scheduled": scenario.scheduled,
+        "complete_delivery": scenario.complete_delivery,
     }
 
 
