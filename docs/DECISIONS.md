@@ -2,6 +2,26 @@
 
 Decisions are listed newest first. Dates use `YYYY-MM-DD`.
 
+## 2026-08-05 — Separate the operator overview from deep diagnostics
+
+**Chosen:** Keep the first desktop viewport focused on the live network map, simulator, current
+findings, probable root-fault evidence, and a clearly labeled static AI-explainability preview.
+Findings and root-fault detail scroll independently so long evidence or ticket histories do not
+displace the map or simulator. Place system evidence and operational diagnostics in a second full
+viewport reached by normal page scrolling. Use Phosphor React icons instead of emoji glyphs.
+
+The explainability panel is frontend-only until a later integration. It does not call a model,
+derive incident text from telemetry, or affect classification, location, confidence, ticket state,
+or restoration. Its copy states that structured system evidence remains authoritative.
+
+**Reason:** The first view should support outage localization and dispatch without mixing primary
+incident work with lower-frequency system diagnostics. The static preview establishes the intended
+AI boundary without suggesting that generated output is currently live or trustworthy.
+
+**Rejected:** Moving diagnostics into another route, allowing AI text to replace deterministic
+evidence, making the preview interactive before a backend contract exists, and using emoji as UI
+icons.
+
 ## 2026-08-04 — Prove the backbone in an isolated clean Compose project
 
 **Chosen:** Keep focused domain and integration tests in the backend test image, component checks in the frontend test image, and one Playwright 1.61 Chromium workflow in a dedicated browser image. `make check` runs all three layers. Clean acceptance uses a separate Compose project, host ports, network, PostgreSQL volume, and Redis volume; it builds and starts from empty state, runs the UI workflow, and removes only those temporary resources afterward.

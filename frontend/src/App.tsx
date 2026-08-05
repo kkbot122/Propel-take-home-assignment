@@ -1,3 +1,4 @@
+import { LightningIcon } from '@phosphor-icons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 
@@ -12,6 +13,7 @@ import type {
 } from './api/types'
 import { IncidentDetail } from './components/IncidentDetail'
 import { IncidentList } from './components/IncidentList'
+import { ExplainabilityPanel } from './components/ExplainabilityPanel'
 import { NetworkMap } from './components/NetworkMap'
 import { OperationalDiagnostics } from './components/OperationalDiagnostics'
 
@@ -366,242 +368,271 @@ export function App() {
         </div>
       </header>
 
-      {(backendError || healthQuery.data?.status === 'unhealthy') && (
-        <div className="failure-banner" role="alert">
-          <strong>Live backend data is unavailable.</strong>
-          <span>{backendError ?? 'One or more backend dependencies are unhealthy.'}</span>
-          <button type="button" onClick={() => void queryClient.refetchQueries()}>
-            Retry now
-          </button>
+      <section className="overview-screen" aria-label="Outage operations overview">
+        <div className="overview-messages">
+          {(backendError || healthQuery.data?.status === 'unhealthy') && (
+            <div className="failure-banner" role="alert">
+              <strong>Live backend data is unavailable.</strong>
+              <span>{backendError ?? 'One or more backend dependencies are unhealthy.'}</span>
+              <button type="button" onClick={() => void queryClient.refetchQueries()}>
+                Retry now
+              </button>
+            </div>
+          )}
+
+          {(commandMessage || mutationError) && (
+            <div className={`command-message${mutationError ? ' error' : ''}`} role="status">
+              {mutationError ?? commandMessage}
+            </div>
+          )}
         </div>
-      )}
 
-      <OperationalDiagnostics
-        diagnostics={diagnosticsQuery.data ?? null}
-        telemetry={telemetryDiagnosticsQuery.data?.items ?? []}
-        staleDevices={staleDevicesQuery.data?.items ?? []}
-        loading={diagnosticsQuery.isPending}
-        error={diagnosticsError}
-        onRetry={() => void queryClient.refetchQueries({ queryKey: ['diagnostics'] })}
-      />
-
-      {SIMULATOR_CONTROLS_ENABLED && (
-        <section className="scenario-bar" aria-labelledby="scenario-title">
-          <div className="scenario-copy">
-            <span className="scenario-icon" aria-hidden="true">⚡</span>
-            <div>
-              <div className="scenario-heading">
-                <h2 id="scenario-title">Simulator</h2>
-                <span className={`scenario-status${activeFaults.length > 0 ? ' active' : ''}`}>
-                  {activeFaults.length > 0
-                    ? `${activeFaults.length} active fault${activeFaults.length === 1 ? '' : 's'}`
-                    : 'Ready'}
+        <div className="overview-grid">
+          <div className="overview-left">
+            <section className="panel map-panel" aria-labelledby="map-title">
+              <div className="panel-heading map-heading">
+                <div>
+                  <p className="section-label">
+                    Anjanapura · Konanakunte · Kothnur · JP Nagar
+                  </p>
+                  <h2 id="map-title">
+                    {subdivisionQuery.data?.name ?? 'South Bengaluru subdivision'}
+                  </h2>
+                </div>
+                <div className="map-heading-tools">
+                  <span className="map-focus-label">
+                    {selectedIncident
+                      ? `Focused · ${selectedIncident.suspected_asset_id
+                          .replace('->', ' → ')
+                          .replace('..', ' ⇢ ')}`
+                      : 'Subdivision overview'}
+                  </span>
+                  <div className="map-filters" aria-label="Network map filters">
+                    <label>
+                      <span>Feeder</span>
+                      <select
+                        aria-label="Filter map by feeder"
+                        value={selectedFeederId}
+                        onChange={(event) => {
+                          setSelectedFeederId(event.target.value)
+                          setSelectedTransformerId('ALL')
+                        }}
+                      >
+                        <option value="ALL">All feeders</option>
+                        {subdivisionQuery.data?.feeders.map((feeder) => (
+                          <option key={feeder.feeder_id} value={feeder.feeder_id}>
+                            {feeder.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Transformer</span>
+                      <select
+                        aria-label="Filter map by transformer"
+                        value={selectedTransformerId}
+                        onChange={(event) => setSelectedTransformerId(event.target.value)}
+                      >
+                        <option value="ALL">All DTs</option>
+                        {transformerOptions.map((transformer) => (
+                          <option key={transformer.dt_id} value={transformer.dt_id}>
+                            {transformer.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+              </div>
+              {(polesQuery.isPending && !polesQuery.data) ||
+              (subdivisionQuery.isPending && !subdivisionQuery.data) ? (
+                <div className="map-loading" role="status">
+                  <span className="spinner" aria-hidden="true" />
+                  Loading subdivision network…
+                </div>
+              ) : (
+                <NetworkMap
+                  poles={visiblePoles}
+                  subdivision={filteredSubdivision}
+                  selectedIncident={selectedIncident}
+                  showPoleLabels={selectedTransformerId !== 'ALL'}
+                />
+              )}
+              <div className="map-footer">
+                <span>
+                  {filteredSubdivision?.substations.length ?? 0} substations ·{' '}
+                  {filteredSubdivision?.feeders.length ?? 0} feeders ·{' '}
+                  {filteredSubdivision?.transformers.length ?? 0} DTs
+                </span>
+                <span>
+                  {visiblePoles.filter((pole) => pole.state === 'LIVE').length}/{visiblePoles.length}{' '}
+                  poles live ·{' '}
+                  {filteredSubdivision?.topologies.filter(
+                    (topology) => topology.source === 'INFERRED',
+                  ).length ?? 0}{' '}
+                  inferred DTs
                 </span>
               </div>
-              <p id="scenario-description">
-                {selectedScenario?.description ?? 'Choose a field condition to simulate.'}
-              </p>
-            </div>
+            </section>
+
+            <ExplainabilityPanel />
           </div>
-          <div className="scenario-actions">
-            <label className="scenario-picker">
-              <span>Scenario</span>
-              <select
-                aria-describedby="scenario-description"
-                value={selectedScenarioId}
-                onChange={(event) => setSelectedScenarioId(event.target.value)}
-                disabled={operationPending || scenariosQuery.isPending}
-              >
-                {(scenariosQuery.data ?? []).map((scenario) => (
-                  <option key={scenario.scenario_id} value={scenario.scenario_id}>
-                    {scenarioLabel(scenario)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              className="inject-button"
-              onClick={() => {
-                setSelectedIncidentId(null)
-                simulatorMutation.mutate({
-                  action: 'scenario',
-                  scenarioId: selectedScenarioId,
-                })
-              }}
-              disabled={operationPending || scenariosQuery.isPending || activeFaults.length > 0}
-            >
-              Run scenario
-            </button>
-            {selectedSimulatorFault && selectedTicketId && (
-              <div className="scenario-repair-actions" aria-label="Selected fault repair actions">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => simulatorMutation.mutate({
-                    action: 'repair',
-                    faultId: selectedSimulatorFault.fault_id,
-                    restorationFraction: 0.5,
-                  })}
-                  disabled={operationPending}
-                >
-                  Restore 50%
-                </button>
-                <button
-                  type="button"
-                  className="repair-button"
-                  onClick={() => simulatorMutation.mutate({
-                    action: 'repair',
-                    faultId: selectedSimulatorFault.fault_id,
-                    restorationFraction: 1,
-                  })}
-                  disabled={operationPending}
-                >
-                  Complete repair
-                </button>
-              </div>
-            )}
-            <button
-              type="button"
-              className="scenario-reset"
-              onClick={() => {
-                setSelectedIncidentId(null)
-                simulatorMutation.mutate({ action: 'reset' })
-              }}
-              disabled={operationPending}
-            >
-              Reset
-            </button>
-          </div>
-        </section>
-      )}
 
-      {(commandMessage || mutationError) && (
-        <div className={`command-message${mutationError ? ' error' : ''}`} role="status">
-          {mutationError ?? commandMessage}
-        </div>
-      )}
-
-      <section className="workspace" aria-label="Outage operations workspace">
-        <IncidentList
-          incidents={incidents}
-          selectedIncidentId={effectiveSelectedIncidentId}
-          onSelect={setSelectedIncidentId}
-          loading={incidentsQuery.isPending || suppressedIncidentsQuery.isPending}
-        />
-
-        <section className="panel map-panel" aria-labelledby="map-title">
-          <div className="panel-heading map-heading">
-            <div>
-              <p className="section-label">
-                Anjanapura · Konanakunte · Kothnur · JP Nagar
-              </p>
-              <h2 id="map-title">
-                {subdivisionQuery.data?.name ?? 'South Bengaluru subdivision'}
-              </h2>
-            </div>
-            <div className="map-heading-tools">
-              <span className="map-focus-label">
-                {selectedIncident
-                  ? `Focused · ${selectedIncident.suspected_asset_id
-                      .replace('->', ' → ')
-                      .replace('..', ' ⇢ ')}`
-                  : 'Subdivision overview'}
-              </span>
-              <div className="map-filters" aria-label="Network map filters">
-                <label>
-                  <span>Feeder</span>
-                  <select
-                    aria-label="Filter map by feeder"
-                    value={selectedFeederId}
-                    onChange={(event) => {
-                      setSelectedFeederId(event.target.value)
-                      setSelectedTransformerId('ALL')
+          <div className="overview-right">
+            {SIMULATOR_CONTROLS_ENABLED && (
+              <section className="scenario-bar" aria-labelledby="scenario-title">
+                <div className="scenario-copy">
+                  <span className="scenario-icon" aria-hidden="true">
+                    <LightningIcon size={19} weight="fill" />
+                  </span>
+                  <div>
+                    <div className="scenario-heading">
+                      <h2 id="scenario-title">Simulator</h2>
+                      <span
+                        className={`scenario-status${activeFaults.length > 0 ? ' active' : ''}`}
+                      >
+                        {activeFaults.length > 0
+                          ? `${activeFaults.length} active fault${
+                              activeFaults.length === 1 ? '' : 's'
+                            }`
+                          : 'Ready'}
+                      </span>
+                    </div>
+                    <p id="scenario-description">
+                      {selectedScenario?.description ?? 'Choose a field condition to simulate.'}
+                    </p>
+                  </div>
+                </div>
+                <div className="scenario-actions">
+                  <label className="scenario-picker">
+                    <span>Scenario</span>
+                    <select
+                      aria-describedby="scenario-description"
+                      value={selectedScenarioId}
+                      onChange={(event) => setSelectedScenarioId(event.target.value)}
+                      disabled={operationPending || scenariosQuery.isPending}
+                    >
+                      {(scenariosQuery.data ?? []).map((scenario) => (
+                        <option key={scenario.scenario_id} value={scenario.scenario_id}>
+                          {scenarioLabel(scenario)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="inject-button"
+                    onClick={() => {
+                      setSelectedIncidentId(null)
+                      simulatorMutation.mutate({
+                        action: 'scenario',
+                        scenarioId: selectedScenarioId,
+                      })
                     }}
+                    disabled={
+                      operationPending || scenariosQuery.isPending || activeFaults.length > 0
+                    }
                   >
-                    <option value="ALL">All feeders</option>
-                    {subdivisionQuery.data?.feeders.map((feeder) => (
-                      <option key={feeder.feeder_id} value={feeder.feeder_id}>
-                        {feeder.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Transformer</span>
-                  <select
-                    aria-label="Filter map by transformer"
-                    value={selectedTransformerId}
-                    onChange={(event) => setSelectedTransformerId(event.target.value)}
+                    Run scenario
+                  </button>
+                  {selectedSimulatorFault && selectedTicketId && (
+                    <div
+                      className="scenario-repair-actions"
+                      aria-label="Selected fault repair actions"
+                    >
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() =>
+                          simulatorMutation.mutate({
+                            action: 'repair',
+                            faultId: selectedSimulatorFault.fault_id,
+                            restorationFraction: 0.5,
+                          })
+                        }
+                        disabled={operationPending}
+                      >
+                        Restore 50%
+                      </button>
+                      <button
+                        type="button"
+                        className="repair-button"
+                        onClick={() =>
+                          simulatorMutation.mutate({
+                            action: 'repair',
+                            faultId: selectedSimulatorFault.fault_id,
+                            restorationFraction: 1,
+                          })
+                        }
+                        disabled={operationPending}
+                      >
+                        Complete repair
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="scenario-reset"
+                    onClick={() => {
+                      setSelectedIncidentId(null)
+                      simulatorMutation.mutate({ action: 'reset' })
+                    }}
+                    disabled={operationPending}
                   >
-                    <option value="ALL">All DTs</option>
-                    {transformerOptions.map((transformer) => (
-                      <option key={transformer.dt_id} value={transformer.dt_id}>
-                        {transformer.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </div>
-          </div>
-          {(polesQuery.isPending && !polesQuery.data) ||
-          (subdivisionQuery.isPending && !subdivisionQuery.data) ? (
-            <div className="map-loading" role="status">
-              <span className="spinner" aria-hidden="true" />
-              Loading subdivision network…
-            </div>
-          ) : (
-            <NetworkMap
-              poles={visiblePoles}
-              subdivision={filteredSubdivision}
-              selectedIncident={selectedIncident}
-              showPoleLabels={selectedTransformerId !== 'ALL'}
-            />
-          )}
-          <div className="map-footer">
-            <span>
-              {filteredSubdivision?.substations.length ?? 0} substations ·{' '}
-              {filteredSubdivision?.feeders.length ?? 0} feeders ·{' '}
-              {filteredSubdivision?.transformers.length ?? 0} DTs
-            </span>
-            <span>
-              {visiblePoles.filter((pole) => pole.state === 'LIVE').length}/{visiblePoles.length}{' '}
-              poles live ·{' '}
-              {filteredSubdivision?.topologies.filter(
-                (topology) => topology.source === 'INFERRED',
-              ).length ?? 0}{' '}
-              inferred DTs
-            </span>
-          </div>
-        </section>
+                    Reset
+                  </button>
+                </div>
+              </section>
+            )}
 
-        <IncidentDetail
-          incident={selectedIncident}
-          ticket={ticket}
-          loading={
-            effectiveSelectedIncidentId !== null &&
-            (incidentQuery.isPending || (selectedTicketId !== null && ticketQuery.isPending))
-          }
-          actionPending={ticketMutation.isPending}
-          onAcknowledge={() => {
-            if (selectedTicketId) {
-              setSelectedIncidentId(selectedIncident?.incident_id ?? null)
-              ticketMutation.mutate({ action: 'acknowledge', ticketId: selectedTicketId })
-            }
-          }}
-          onAssign={(crew) => {
-            if (selectedTicketId) {
-              setSelectedIncidentId(selectedIncident?.incident_id ?? null)
-              ticketMutation.mutate({ action: 'assign', ticketId: selectedTicketId, crew })
-            }
-          }}
-          onResolve={() => {
-            if (selectedTicketId) {
-              setSelectedIncidentId(selectedIncident?.incident_id ?? null)
-              ticketMutation.mutate({ action: 'resolve', ticketId: selectedTicketId })
-            }
-          }}
+            <section className="findings-workspace" aria-label="Current incident findings">
+              <IncidentList
+                incidents={incidents}
+                selectedIncidentId={effectiveSelectedIncidentId}
+                onSelect={setSelectedIncidentId}
+                loading={incidentsQuery.isPending || suppressedIncidentsQuery.isPending}
+              />
+
+              <IncidentDetail
+                incident={selectedIncident}
+                ticket={ticket}
+                loading={
+                  effectiveSelectedIncidentId !== null &&
+                  (incidentQuery.isPending || (selectedTicketId !== null && ticketQuery.isPending))
+                }
+                actionPending={ticketMutation.isPending}
+                onAcknowledge={() => {
+                  if (selectedTicketId) {
+                    setSelectedIncidentId(selectedIncident?.incident_id ?? null)
+                    ticketMutation.mutate({ action: 'acknowledge', ticketId: selectedTicketId })
+                  }
+                }}
+                onAssign={(crew) => {
+                  if (selectedTicketId) {
+                    setSelectedIncidentId(selectedIncident?.incident_id ?? null)
+                    ticketMutation.mutate({ action: 'assign', ticketId: selectedTicketId, crew })
+                  }
+                }}
+                onResolve={() => {
+                  if (selectedTicketId) {
+                    setSelectedIncidentId(selectedIncident?.incident_id ?? null)
+                    ticketMutation.mutate({ action: 'resolve', ticketId: selectedTicketId })
+                  }
+                }}
+              />
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section className="diagnostics-screen" aria-label="System evidence and diagnostics">
+        <OperationalDiagnostics
+          diagnostics={diagnosticsQuery.data ?? null}
+          telemetry={telemetryDiagnosticsQuery.data?.items ?? []}
+          staleDevices={staleDevicesQuery.data?.items ?? []}
+          loading={diagnosticsQuery.isPending}
+          error={diagnosticsError}
+          onRetry={() => void queryClient.refetchQueries({ queryKey: ['diagnostics'] })}
         />
       </section>
 

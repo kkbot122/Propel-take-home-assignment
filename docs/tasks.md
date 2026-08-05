@@ -1150,6 +1150,9 @@ Build the generator early because every later task depends on realistic test dat
 
 Recommended feature: operator-facing incident summary after deterministic localization.
 
+- [x] Add a clearly labeled frontend-only integration preview without generated claims or a
+      runtime AI dependency.
+
 ## 20.1 Define the AI boundary
 
 - [ ] Ensure the LLM never chooses the fault classification or location.

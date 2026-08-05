@@ -1,3 +1,4 @@
+import { CompassIcon } from '@phosphor-icons/react'
 import { type FormEvent, useState } from 'react'
 
 import type { Incident, Ticket, TicketStatus } from '../api/types'
@@ -163,7 +164,7 @@ export function IncidentDetail({
       <section className="panel detail-panel" aria-label="Incident detail">
         <div className="empty-state detail-empty">
           <span className="empty-icon compass" aria-hidden="true">
-            +
+            <CompassIcon size={24} weight="duotone" />
           </span>
           <h3>No incident selected</h3>
           <p>When telemetry localizes a fault, its evidence and repair workflow appear here.</p>

@@ -578,6 +578,33 @@ describe('App', () => {
     expect(screen.getByText('topology provenance')).toBeInTheDocument()
   })
 
+  it('arranges the operator overview before diagnostics and labels AI content as a static preview', async () => {
+    installFetchRouter()
+    renderApp()
+
+    const map = await screen.findByTestId('network-map')
+    const overview = screen.getByRole('region', { name: 'Outage operations overview' })
+    const findings = screen.getByRole('region', { name: 'Current incident findings' })
+    const diagnosticsRegion = screen.getByRole('region', {
+      name: 'System evidence and diagnostics',
+    })
+
+    expect(overview).toContainElement(map)
+    expect(overview).toContainElement(findings)
+    expect(overview).toContainElement(
+      screen.getByRole('heading', { name: 'Incident explanation assistant' }),
+    )
+    expect(screen.getByText('Frontend preview')).toBeInTheDocument()
+    expect(
+      screen.getByText('This preview is static and makes no operational decisions.'),
+    ).toBeInTheDocument()
+    expect(
+      overview.compareDocumentPosition(diagnosticsRegion) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(screen.queryByText('⚡')).not.toBeInTheDocument()
+    expect(screen.queryByText('✓')).not.toBeInTheDocument()
+  })
+
   it('applies a valid ticket action and refreshes server state', async () => {
     const fetchMock = installFetchRouter()
     renderApp()

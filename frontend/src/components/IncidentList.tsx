@@ -1,3 +1,4 @@
+import { CheckCircleIcon } from '@phosphor-icons/react'
 import { useMemo, useState } from 'react'
 
 import type { Incident } from '../api/types'
@@ -90,7 +91,7 @@ export function IncidentList({
       ) : incidents.length === 0 ? (
         <div className="empty-state">
           <span className="empty-icon" aria-hidden="true">
-            ✓
+            <CheckCircleIcon size={24} weight="duotone" />
           </span>
           <h3>No active outages</h3>
           <p>The network is clear. Choose a simulator scenario above to begin.</p>
