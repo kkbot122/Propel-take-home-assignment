@@ -159,3 +159,37 @@ def test_eighty_percent_threshold_rounds_up() -> None:
     assert decision.verified is False
     assert decision.live_count == 2
     assert decision.remaining_dark_count == 1
+
+
+def test_transformer_restoration_can_verify_without_boundary_anchor() -> None:
+    claimed_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    restored_at = claimed_at + timedelta(seconds=1)
+
+    decision = restoration_decision(
+        (evidence("P-002", PoleStatus.LIVE, restored_at),),
+        repair_claimed_at=claimed_at,
+        evaluated_at=restored_at + timedelta(seconds=10),
+        threshold=0.8,
+        stabilization_seconds=10,
+        require_anchor=False,
+    )
+
+    assert decision.verified is True
+    assert decision.reason == RESTORATION_VERIFIED
+    assert decision.remaining_dark_count == 0
+
+
+def test_span_restoration_still_requires_boundary_anchor() -> None:
+    claimed_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    restored_at = claimed_at + timedelta(seconds=1)
+
+    decision = restoration_decision(
+        (evidence("P-002", PoleStatus.LIVE, restored_at),),
+        repair_claimed_at=claimed_at,
+        evaluated_at=restored_at + timedelta(seconds=10),
+        threshold=0.8,
+        stabilization_seconds=10,
+    )
+
+    assert decision.verified is False
+    assert decision.reason == REPAIR_NOT_VERIFIED

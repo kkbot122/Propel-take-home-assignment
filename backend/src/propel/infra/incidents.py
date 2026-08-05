@@ -643,6 +643,9 @@ class PostgresIncidentService:
                 for ticket in tickets:
                     if ticket.resolution_claimed_at is None:
                         continue
+                    incident = await session.get(Incident, ticket.incident_id)
+                    if incident is None:
+                        continue
                     rows = (
                         await session.execute(
                             select(
@@ -678,10 +681,18 @@ class PostgresIncidentService:
                         evaluated_at=evaluated_at,
                         threshold=threshold,
                         stabilization_seconds=stabilization_seconds,
+                        require_anchor=(
+                            incident.suspected_asset_type == SuspectedAssetType.SPAN
+                        ),
                     )
-                    ticket.restoration_status = decision.reason
-                    ticket.remaining_dark_count = decision.remaining_dark_count
-                    ticket.updated_at = evaluated_at
+                    restoration_changed = (
+                        ticket.restoration_status != decision.reason
+                        or ticket.remaining_dark_count != decision.remaining_dark_count
+                    )
+                    if restoration_changed:
+                        ticket.restoration_status = decision.reason
+                        ticket.remaining_dark_count = decision.remaining_dark_count
+                        ticket.updated_at = evaluated_at
                     if not decision.verified:
                         continue
 
@@ -720,11 +731,9 @@ class PostgresIncidentService:
                     ticket.verified_at = evaluated_at
                     ticket.closed_at = evaluated_at
                     ticket.restoration_status = RESTORATION_VERIFIED
-                    incident = await session.get(Incident, ticket.incident_id)
-                    if incident is not None:
-                        incident.status = IncidentStatus.RESOLVED
-                        incident.resolved_at = evaluated_at
-                        incident.updated_at = evaluated_at
+                    incident.status = IncidentStatus.RESOLVED
+                    incident.resolved_at = evaluated_at
+                    incident.updated_at = evaluated_at
                     verified_ticket_ids.append(ticket.ticket_id)
         except SQLAlchemyError as error:
             raise IncidentStoreUnavailableError from error

@@ -52,6 +52,7 @@ def restoration_decision(
     evaluated_at: datetime,
     threshold: float,
     stabilization_seconds: float,
+    require_anchor: bool = True,
 ) -> RestorationDecision:
     eligible = tuple(item for item in evidence if item.eligible)
     fresh_live = tuple(
@@ -73,7 +74,9 @@ def restoration_decision(
         return RestorationDecision(False, REPAIR_NOT_VERIFIED, stable_since=None, **common)
 
     required_roots = tuple(item for item in evidence if item.is_boundary_child)
-    if not required_roots or any(item not in fresh_live for item in required_roots):
+    if require_anchor and not required_roots:
+        return RestorationDecision(False, REPAIR_NOT_VERIFIED, stable_since=None, **common)
+    if any(item not in fresh_live for item in required_roots):
         return RestorationDecision(False, REPAIR_NOT_VERIFIED, stable_since=None, **common)
 
     required_live_count = ceil(len(eligible) * threshold)

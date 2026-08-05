@@ -79,6 +79,31 @@ function faultExplainsIncident(fault: SimulatedFault, incident: Incident | null)
   )
 }
 
+function explanationSignature(incident: Incident | null, ticket: Ticket | null): string | null {
+  if (!incident) return null
+  const stableEvidence = { ...incident.evidence }
+  delete stableEvidence.analysis_at
+  return JSON.stringify({
+    status: incident.status,
+    classification: incident.classification,
+    suspected_asset_type: incident.suspected_asset_type,
+    suspected_asset_id: incident.suspected_asset_id,
+    precision: incident.precision,
+    affected_pole_count: incident.affected_pole_count,
+    confidence_score: incident.confidence_score,
+    confidence_reason: incident.confidence_reason,
+    evidence: stableEvidence,
+    suppression_reason: incident.suppression_reason,
+    ticket: ticket
+      ? {
+          status: ticket.status,
+          restoration_status: ticket.restoration_status,
+          remaining_dark_count: ticket.remaining_dark_count,
+        }
+      : null,
+  })
+}
+
 const SCENARIO_LABELS: Record<string, string> = {
   'surveyed-span': 'Surveyed span fault',
   'inferred-span': 'Inferred span fault',
@@ -234,12 +259,15 @@ export function App() {
   const ticket: Ticket | null = ticketQuery.data ?? null
   const explanationReady =
     selectedIncident !== null && (selectedIncident.ticket_id === null || ticket !== null)
+  const selectedExplanationSignature = useMemo(
+    () => explanationSignature(selectedIncident, ticket),
+    [selectedIncident, ticket],
+  )
   const explanationQuery = useQuery({
     queryKey: [
       'incident-explanation',
       selectedIncident?.incident_id,
-      selectedIncident?.updated_at,
-      ticket?.updated_at ?? null,
+      selectedExplanationSignature,
     ],
     queryFn: () => api.explainIncident(selectedIncident?.incident_id as string),
     enabled: explanationReady,

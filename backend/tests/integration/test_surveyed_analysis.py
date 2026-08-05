@@ -139,6 +139,7 @@ class FailingSnapshotRepository:
 class AsgiSimulatorTelemetryGateway:
     def __init__(self) -> None:
         self.app = None
+        self.event_ids: set[UUID] = set()
 
     async def emit(self, command: TelemetryCommand) -> SimulatorEmissionReceipt:
         if self.app is None:
@@ -163,10 +164,12 @@ class AsgiSimulatorTelemetryGateway:
             )
         assert response.status_code == 202
         payload = response.json()
-        return SimulatorEmissionReceipt(
+        receipt = SimulatorEmissionReceipt(
             event_id=UUID(payload["event_id"]),
             received_at=datetime.fromisoformat(payload["received_at"]),
         )
+        self.event_ids.add(receipt.event_id)
+        return receipt
 
     async def close(self) -> None:
         pass
@@ -1201,6 +1204,94 @@ async def test_missing_device_noise_persists_and_serves_corridor_precision(
             restored_ticket = await incidents.get_ticket(persisted.ticket_id)
             assert verified_count == 1 or restored_ticket.status == TicketStatus.CLOSED
             assert restored_ticket.status == TicketStatus.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_simulator_reset_recovers_missing_device_noise(
+    analysis_harness: AnalysisHarness,
+) -> None:
+    base = datetime.now(UTC)
+    clock = MutableClock(base)
+    ingestion = TelemetryIngestionService(
+        PostgresPoleBindingResolver(analysis_harness.engine),
+        RedisTelemetryPublisher(analysis_harness.redis, analysis_harness.stream),
+        clock=clock,
+    )
+    gateway = AsgiSimulatorTelemetryGateway()
+    simulator = PostgresSimulatorService(analysis_harness.engine, gateway, clock=clock)
+    incidents = PostgresIncidentService(analysis_harness.engine, clock=clock)
+    app = create_app(
+        settings=get_settings(),
+        telemetry_service=ingestion,
+        incident_service=incidents,
+        simulator_service=simulator,
+    )
+    gateway.app = app
+    consumer = analysis_harness.consumer()
+    await consumer.ensure_group()
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            inject_response = await client.post(
+                "/api/simulator/faults",
+                json={
+                    "fault_type": "SPAN_FAULT",
+                    "dt_id": "DT-001",
+                    "parent_pole_id": "P-001",
+                    "child_pole_id": "P-002",
+                    "missing_device_pole_ids": ["P-002"],
+                },
+            )
+            assert inject_response.status_code == 201, inject_response.json()
+            injected = inject_response.json()
+            analysis_harness.simulated_fault_ids.add(UUID(injected["fault_id"]))
+            assert await consumer.consume_new_once() == 3
+
+            session_factory = async_sessionmaker(
+                analysis_harness.engine,
+                expire_on_commit=False,
+            )
+            async with session_factory() as session:
+                missing_health = (
+                    await session.execute(
+                        select(DeviceHealth.status, DeviceHealth.status_reason)
+                        .join(Device, Device.id == DeviceHealth.device_id)
+                        .where(Device.device_id == "DEV-P-002")
+                    )
+                ).one()
+            assert missing_health.status == DeviceHealthStatus.STALE
+            assert missing_health.status_reason == "simulator_missing_device"
+
+            clock.value = base + timedelta(seconds=20)
+            reset_response = await client.post("/api/simulator/reset")
+            assert reset_response.status_code == 200, reset_response.json()
+
+            # Four repair events for P-003/P-004 plus one recovery heartbeat for P-002.
+            assert await consumer.consume_new_once() == 5
+            analysis_harness.event_ids.update(gateway.event_ids)
+
+            async with session_factory() as session:
+                restored = (
+                    await session.execute(
+                        select(
+                            DeviceHealth.status,
+                            DeviceHealth.status_reason,
+                            PoleState.state,
+                        )
+                        .join(Device, Device.id == DeviceHealth.device_id)
+                        .join(DeviceBinding, DeviceBinding.device_id == Device.id)
+                        .join(Pole, Pole.id == DeviceBinding.pole_id)
+                        .join(PoleState, PoleState.pole_id == Pole.id)
+                        .where(
+                            Device.device_id == "DEV-P-002",
+                            DeviceBinding.valid_to.is_(None),
+                        )
+                    )
+                ).one()
+
+            assert restored.status == DeviceHealthStatus.HEALTHY
+            assert restored.status_reason == "energized_heartbeat"
+            assert restored.state == PoleStatus.LIVE
 
 
 @pytest.mark.asyncio

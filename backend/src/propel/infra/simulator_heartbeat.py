@@ -36,6 +36,7 @@ class PostgresSimulatorHeartbeatEmitter:
         "simulator_missing_device",
         "simulator_device_failure",
         "simulator_device_failure_pending",
+        "simulator_device_recovery_pending",
     )
 
     def __init__(

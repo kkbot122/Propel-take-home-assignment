@@ -17,6 +17,7 @@ from propel.domain.enums import (
     ScheduledOutageScope,
     SimulatorFaultStatus,
     SimulatorFaultType,
+    TicketStatus,
     TelemetryEventType,
 )
 from propel.infra.database.models import (
@@ -26,11 +27,13 @@ from propel.infra.database.models import (
     DistributionTransformer,
     Feeder,
     GeneratedDataset,
+    IncidentPole,
     Pole,
     PoleState,
     ScheduledOutage,
     SimulatedFault,
     SimulatorTopologyEdge,
+    Ticket,
     TopologyEdge,
 )
 from propel.infra.staleness import PostgresStaleDeviceScanner, StaleScanUnavailableError
@@ -160,6 +163,12 @@ class HttpSimulatorTelemetryGateway:
 
 class PostgresSimulatorService:
     _INJECTION_LOCK_KEY = 73_672_603
+    _RECOVERABLE_DEVICE_REASONS = (
+        "simulator_device_failure",
+        "simulator_device_failure_pending",
+        "simulator_device_recovery_pending",
+        "simulator_missing_device",
+    )
 
     def __init__(
         self,
@@ -502,53 +511,6 @@ class PostgresSimulatorService:
             raise SimulatorStoreUnavailableError from error
         return selected.device_id, selected.pole_id
 
-    async def _restore_failed_devices(self) -> None:
-        restored_at = self._clock()
-        try:
-            async with self._session_factory.begin() as session:
-                rows = (
-                    await session.execute(
-                        select(Pole.pole_id)
-                        .join(DeviceBinding, DeviceBinding.pole_id == Pole.id)
-                        .join(DeviceHealth, DeviceHealth.device_id == DeviceBinding.device_id)
-                        .where(
-                            DeviceBinding.valid_to.is_(None),
-                            DeviceHealth.status_reason == "simulator_device_failure",
-                        )
-                        .order_by(Pole.pole_id)
-                    )
-                ).all()
-                devices = await self._device_rows(session, tuple(row.pole_id for row in rows))
-                commands = tuple(
-                    self._command(
-                        devices[row.pole_id],
-                        row.pole_id,
-                        TelemetryEventType.HEARTBEAT,
-                        True,
-                        restored_at,
-                        max(
-                            (devices[row.pole_id].last_sequence or 0) + 1,
-                            int(restored_at.timestamp() * 1_000_000) + index,
-                        ),
-                    )
-                    for index, row in enumerate(rows)
-                    if row.pole_id in devices
-                )
-                if devices:
-                    await session.execute(
-                        update(DeviceHealth)
-                        .where(
-                            DeviceHealth.device_id.in_(
-                                tuple(device.internal_device_id for device in devices.values())
-                            )
-                        )
-                        .values(status_reason="simulator_device_recovery_pending")
-                    )
-        except SQLAlchemyError as error:
-            raise SimulatorStoreUnavailableError from error
-        if commands:
-            await self._emit_all(commands)
-
     async def _inject_fixed_scope_fault(
         self,
         fault_type: SimulatorFaultType,
@@ -747,6 +709,95 @@ class PostgresSimulatorService:
         except SQLAlchemyError as error:
             raise SimulatorStoreUnavailableError from error
 
+    async def reset_target_pole_ids(self) -> tuple[str, ...]:
+        """Return every simulator pole that still needs reset reconciliation.
+
+        Reset must remain retryable after a fault row has already been marked
+        REPAIRED. A previous request may have reached Redis without the worker
+        applying its telemetry, or a ticket may have been created after the
+        first reset claim. Current non-live poles, open ticket poles, active
+        fault scopes, and recoverable simulator-device failures are therefore
+        included in the next reset attempt.
+        """
+        open_ticket_statuses = (
+            TicketStatus.DETECTED,
+            TicketStatus.ACKNOWLEDGED,
+            TicketStatus.CREW_ASSIGNED,
+            TicketStatus.RESOLVED,
+        )
+        try:
+            async with self._session_factory() as session:
+                fault_rows = (
+                    await session.execute(
+                        select(
+                            SimulatedFault.status,
+                            SimulatedFault.deenergized_pole_ids,
+                        )
+                    )
+                ).all()
+                historical_pole_ids = {
+                    pole_id
+                    for row in fault_rows
+                    for pole_id in row.deenergized_pole_ids
+                }
+                active_pole_ids = {
+                    pole_id
+                    for row in fault_rows
+                    if row.status == SimulatorFaultStatus.ACTIVE
+                    for pole_id in row.deenergized_pole_ids
+                }
+
+                non_live_pole_ids: set[str] = set()
+                open_ticket_pole_ids: set[str] = set()
+                if historical_pole_ids:
+                    state_rows = (
+                        await session.execute(
+                            select(Pole.pole_id, PoleState.state)
+                            .outerjoin(PoleState, PoleState.pole_id == Pole.id)
+                            .where(Pole.pole_id.in_(tuple(historical_pole_ids)))
+                        )
+                    ).all()
+                    non_live_pole_ids = {
+                        row.pole_id for row in state_rows if row.state != PoleStatus.LIVE
+                    }
+                    open_ticket_pole_ids = set(
+                        await session.scalars(
+                            select(Pole.pole_id)
+                            .join(IncidentPole, IncidentPole.pole_id == Pole.id)
+                            .join(Ticket, Ticket.incident_id == IncidentPole.incident_id)
+                            .where(
+                                Pole.pole_id.in_(tuple(historical_pole_ids)),
+                                Ticket.status.in_(open_ticket_statuses),
+                            )
+                            .distinct()
+                        )
+                    )
+
+                recoverable_device_pole_ids = set(
+                    await session.scalars(
+                        select(Pole.pole_id)
+                        .join(DeviceBinding, DeviceBinding.pole_id == Pole.id)
+                        .join(DeviceHealth, DeviceHealth.device_id == DeviceBinding.device_id)
+                        .where(
+                            DeviceBinding.valid_to.is_(None),
+                            DeviceHealth.status_reason.in_(
+                                self._RECOVERABLE_DEVICE_REASONS
+                            ),
+                        )
+                    )
+                )
+        except SQLAlchemyError as error:
+            raise SimulatorStoreUnavailableError from error
+
+        return tuple(
+            sorted(
+                active_pole_ids
+                | non_live_pole_ids
+                | open_ticket_pole_ids
+                | recoverable_device_pole_ids
+            )
+        )
+
     async def repair_fault(
         self,
         fault_id: UUID,
@@ -788,20 +839,48 @@ class PostgresSimulatorService:
             raise SimulatorStoreUnavailableError from error
         return view
 
-    async def reset(self) -> tuple[SimulatedFaultView, ...]:
+    async def reset(
+        self,
+        *,
+        target_pole_ids: Sequence[str] = (),
+    ) -> tuple[SimulatedFaultView, ...]:
         try:
             async with self._session_factory() as session:
-                active_ids = tuple(
-                    await session.scalars(
-                        select(SimulatedFault.fault_id)
+                active_rows = (
+                    await session.execute(
+                        select(
+                            SimulatedFault.fault_id,
+                            SimulatedFault.deenergized_pole_ids,
+                        )
                         .where(SimulatedFault.status == SimulatorFaultStatus.ACTIVE)
                         .order_by(SimulatedFault.injected_at, SimulatedFault.fault_id)
                     )
-                )
+                ).all()
         except SQLAlchemyError as error:
             raise SimulatorStoreUnavailableError from error
+
+        active_ids = tuple(row.fault_id for row in active_rows)
+        active_pole_ids = {
+            pole_id for row in active_rows for pole_id in row.deenergized_pole_ids
+        }
         repaired = tuple([await self.repair_fault(fault_id) for fault_id in active_ids])
-        await self._restore_failed_devices()
+
+        retry_pole_ids = tuple(sorted(set(target_pole_ids) - active_pole_ids))
+        if retry_pole_ids:
+            retry_at = self._clock()
+            try:
+                async with self._session_factory() as session:
+                    commands, _ = await self._repair_commands(
+                        session,
+                        retry_pole_ids,
+                        retry_at,
+                        restoration_fraction=1.0,
+                    )
+            except SQLAlchemyError as error:
+                raise SimulatorStoreUnavailableError from error
+            if commands:
+                await self._emit_all(commands)
+
         try:
             async with self._session_factory.begin() as session:
                 await session.execute(
@@ -1052,7 +1131,8 @@ class PostgresSimulatorService:
             row = rows.get(pole_id)
             if row is None or (
                 row.health_status not in (None, DeviceHealthStatus.HEALTHY)
-                and row.status_reason != "device_silence_timeout"
+                and row.status_reason
+                not in ("device_silence_timeout", *self._RECOVERABLE_DEVICE_REASONS)
             ):
                 continue
             boot_at = occurred_at + timedelta(milliseconds=index * 2)

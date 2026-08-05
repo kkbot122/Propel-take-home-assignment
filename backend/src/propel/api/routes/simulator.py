@@ -281,12 +281,13 @@ async def repair_fault(
 )
 async def reset_simulator(request: Request) -> SimulatorResetResponse | JSONResponse:
     try:
-        active_faults = await simulator_service(request).active_faults()
-        for fault in active_faults:
-            await request.app.state.incident_service.claim_simulator_repairs_for_poles(
-                fault.deenergized_pole_ids
-            )
-        repaired_faults = await simulator_service(request).reset()
+        reset_pole_ids = await simulator_service(request).reset_target_pole_ids()
+        await request.app.state.incident_service.claim_simulator_repairs_for_poles(
+            reset_pole_ids
+        )
+        repaired_faults = await simulator_service(request).reset(
+            target_pole_ids=reset_pole_ids
+        )
     except SimulatorTelemetryUnavailableError:
         return simulator_unavailable(
             "SIMULATOR_TELEMETRY_UNAVAILABLE",
