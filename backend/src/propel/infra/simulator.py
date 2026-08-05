@@ -729,6 +729,20 @@ class PostgresSimulatorService:
         except SQLAlchemyError as error:
             raise SimulatorStoreUnavailableError from error
 
+    async def active_faults(self) -> tuple[SimulatedFaultView, ...]:
+        try:
+            async with self._session_factory() as session:
+                faults = (
+                    await session.scalars(
+                        select(SimulatedFault)
+                        .where(SimulatedFault.status == SimulatorFaultStatus.ACTIVE)
+                        .order_by(SimulatedFault.injected_at, SimulatedFault.fault_id)
+                    )
+                ).all()
+                return tuple([await self._fault_view(session, fault, ()) for fault in faults])
+        except SQLAlchemyError as error:
+            raise SimulatorStoreUnavailableError from error
+
     async def repair_fault(
         self,
         fault_id: UUID,

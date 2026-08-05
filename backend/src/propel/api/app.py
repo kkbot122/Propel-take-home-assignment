@@ -23,6 +23,8 @@ from propel.api.schemas.telemetry import (
     ValidationErrorResponse,
     ValidationIssue,
 )
+from propel.incidents.explanations import IncidentExplanationService
+from propel.infra.ai_explanations import OpenAICompatibleExplanationGateway
 from propel.infra.dependencies import ApplicationResources
 from propel.infra.diagnostics import OperationalDiagnosticsService
 from propel.infra.health import HealthService
@@ -40,6 +42,7 @@ def create_app(
     incident_service: PostgresIncidentService | None = None,
     simulator_service: PostgresSimulatorService | None = None,
     diagnostics_service: OperationalDiagnosticsService | None = None,
+    explanation_service: IncidentExplanationService | None = None,
 ) -> FastAPI:
     application_settings = settings or get_settings()
     application_logger = logging.getLogger("propel")
@@ -60,6 +63,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         resources: ApplicationResources | None = None
+        owns_explanation_service = explanation_service is None
         if (
             health_service is None
             or telemetry_service is None
@@ -96,6 +100,21 @@ def create_app(
             application.state.incident_service = PostgresIncidentService(resources.database)
         else:
             application.state.incident_service = incident_service
+        if explanation_service is not None:
+            application.state.explanation_service = explanation_service
+        elif application_settings.ai_explainer_configured:
+            application.state.explanation_service = IncidentExplanationService(
+                OpenAICompatibleExplanationGateway(
+                    base_url=application_settings.ai_explainer_base_url,
+                    api_key=application_settings.ai_explainer_api_key.get_secret_value(),
+                    model=application_settings.ai_explainer_model,
+                    timeout_seconds=application_settings.ai_explainer_timeout_seconds,
+                    max_input_bytes=application_settings.ai_explainer_max_input_bytes,
+                    max_output_tokens=application_settings.ai_explainer_max_output_tokens,
+                )
+            )
+        else:
+            application.state.explanation_service = IncidentExplanationService()
         if diagnostics_service is None:
             if resources is None:
                 raise RuntimeError("application resources were not created")
@@ -140,6 +159,8 @@ def create_app(
         try:
             yield
         finally:
+            if owns_explanation_service:
+                await application.state.explanation_service.close()
             if application_settings.simulator_enabled and simulator_service is None:
                 await application.state.simulator_service.close()
             if resources is not None:

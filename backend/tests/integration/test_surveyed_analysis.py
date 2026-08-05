@@ -1400,6 +1400,27 @@ async def test_three_independent_simulated_faults_create_three_tickets_and_repai
             ]
             analysis_harness.event_ids.update(UUID(item) for item in reset_events)
             assert await consumer.consume_new_once() == 8
+            assert (await incidents.get_ticket(second_incident.ticket_id)).status == (
+                TicketStatus.RESOLVED
+            )
+            assert (await incidents.get_ticket(third_incident.ticket_id)).status == (
+                TicketStatus.RESOLVED
+            )
+
+            clock.value = base + timedelta(seconds=55)
+            assert (
+                await incidents.verify_restorations_once(
+                    threshold=0.8,
+                    stabilization_seconds=10,
+                )
+                == 2
+            )
+            assert (await incidents.get_ticket(second_incident.ticket_id)).status == (
+                TicketStatus.CLOSED
+            )
+            assert (await incidents.get_ticket(third_incident.ticket_id)).status == (
+                TicketStatus.CLOSED
+            )
 
 
 @pytest.mark.asyncio

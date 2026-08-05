@@ -154,6 +154,12 @@ in Railway service variables or reference variables, never in the repository.
 | `WORKER_HEARTBEAT_TTL_SECONDS` | `30` | Heartbeat expiry; prevents false healthy state after death. |
 | `DIAGNOSTICS_WORKER_STALE_AFTER_SECONDS` | `15` | Console worker-staleness threshold. |
 | `DIAGNOSTICS_TELEMETRY_BACKLOG_WARNING` | `1000` | Consumer-lag warning threshold. |
+| `AI_EXPLAINER_BASE_URL` | empty | Optional OpenAI-compatible base URL including `/v1`. |
+| `AI_EXPLAINER_API_KEY` | empty | Secret bearer key; never expose it to the frontend or worker. |
+| `AI_EXPLAINER_MODEL` | empty | Provider model identifier. |
+| `AI_EXPLAINER_TIMEOUT_SECONDS` | `3` | Bounded provider request timeout. |
+| `AI_EXPLAINER_MAX_INPUT_BYTES` | `12288` | Maximum serialized allowlisted evidence input. |
+| `AI_EXPLAINER_MAX_OUTPUT_TOKENS` | `300` | Maximum requested explanation output. |
 | `RESTORATION_THRESHOLD` | `0.8` | Eligible fresh-live fraction required for verification. |
 | `RESTORATION_STABILIZATION_SECONDS` | `10` | Fresh restoration stabilization window. |
 | `SIMULATOR_TELEMETRY_URL` | local API URL | Development-only simulator emission target. |
@@ -204,6 +210,11 @@ and device endpoints enforce `1..100` limits, cursor pagination, and omit
 The console explicitly renders loading, empty, degraded, stale, suppressed, and
 request-error states. Recent telemetry is collapsed under diagnostics so the
 incident decision remains primary.
+
+The AI explainer is optional and is not included in `/health`. If any required
+AI setting is empty, or the provider fails, the explanation endpoint returns a
+deterministic summary and `fallback_reason` while localization and tickets
+continue normally. Configure AI secrets only on `backend-api`.
 
 ## Deployment smoke test
 

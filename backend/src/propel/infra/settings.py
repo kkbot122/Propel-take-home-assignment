@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     worker_heartbeat_ttl_seconds: int = Field(default=30, ge=5, le=3_600)
     diagnostics_worker_stale_after_seconds: float = Field(default=15, gt=0, le=3_600)
     diagnostics_telemetry_backlog_warning: int = Field(default=1_000, ge=1, le=1_000_000)
+    ai_explainer_base_url: str = Field(default="", max_length=512)
+    ai_explainer_api_key: SecretStr = SecretStr("")
+    ai_explainer_model: str = Field(default="", max_length=128)
+    ai_explainer_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
+    ai_explainer_max_input_bytes: int = Field(default=12_288, ge=1_024, le=65_536)
+    ai_explainer_max_output_tokens: int = Field(default=300, ge=64, le=1_024)
     restoration_threshold: float = Field(default=0.8, gt=0, le=1)
     restoration_stabilization_seconds: float = Field(default=10.0, ge=0, le=300)
     simulator_telemetry_url: str = Field(
@@ -89,6 +95,14 @@ class Settings(BaseSettings):
     @property
     def trusted_hosts(self) -> list[str]:
         return [item.strip() for item in self.allowed_hosts.split(",") if item.strip()]
+
+    @property
+    def ai_explainer_configured(self) -> bool:
+        return bool(
+            self.ai_explainer_base_url.strip()
+            and self.ai_explainer_api_key.get_secret_value()
+            and self.ai_explainer_model.strip()
+        )
 
 
 @lru_cache

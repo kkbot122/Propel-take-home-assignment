@@ -1540,6 +1540,12 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.preview-badge.ai {
+  border-color: #9fbcaa;
+  color: var(--green);
+  background: #e7f1e9;
+}
+
 .explainability-content {
   display: grid;
   min-height: 0;
@@ -1575,19 +1581,43 @@ button:disabled {
   line-height: 1.48;
 }
 
-.explainability-prompts {
+.explanation-sections {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: start;
+  gap: 0.55rem;
+}
+
+.explanation-sections article {
   display: grid;
   align-content: start;
   gap: 0.35rem;
-}
-
-.explainability-prompts span {
-  padding: 0.42rem 0.55rem;
+  padding: 0.55rem 0.65rem;
   border: 1px solid #d5ddd6;
   border-radius: 4px;
-  color: #52615a;
   background: rgb(255 255 255 / 76%);
+}
+
+.explanation-sections span {
+  color: var(--green-2);
+  font-size: 0.61rem;
+  font-weight: 850;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.explanation-sections p {
+  margin: 0;
+  color: #52615a;
   font-size: 0.64rem;
+  line-height: 1.45;
+}
+
+.explainability-empty,
+.explainability-error,
+.explainability-content > .loading-block {
+  grid-column: 1 / -1;
 }
 
 .explainability-boundary {

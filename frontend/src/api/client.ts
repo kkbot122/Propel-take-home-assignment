@@ -3,6 +3,7 @@ import type {
   HealthResponse,
   InjectFaultRequest,
   Incident,
+  IncidentExplanation,
   NetworkOverview,
   NetworkPole,
   NetworkSubdivision,
@@ -60,6 +61,10 @@ export const api = {
     requestJson<Incident[]>('/api/incidents?status=SUPPRESSED&limit=100'),
   incident: (incidentId: string) =>
     requestJson<Incident>(`/api/incidents/${incidentId}`),
+  explainIncident: (incidentId: string) =>
+    requestJson<IncidentExplanation>(`/api/incidents/${incidentId}/explanation`, {
+      method: 'POST',
+    }),
   ticket: (ticketId: string) => requestJson<Ticket>(`/api/tickets/${ticketId}`),
   subdivisionPoles: () =>
     requestJson<NetworkPole[]>('/api/network/subdivision/poles'),

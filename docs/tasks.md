@@ -1155,36 +1155,36 @@ Recommended feature: operator-facing incident summary after deterministic locali
 
 ## 20.1 Define the AI boundary
 
-- [ ] Ensure the LLM never chooses the fault classification or location.
-- [ ] Pass only structured, already-decided incident evidence.
-- [ ] Ask the model to produce a short operator summary.
-- [ ] Record this decision in `ARCHITECTURE.md` and `DECISIONS.md`.
+- [x] Ensure the LLM never chooses the fault classification or location.
+- [x] Pass only structured, already-decided incident evidence.
+- [x] Ask the model to produce a short operator summary.
+- [x] Record this decision in `ARCHITECTURE.md` and `DECISIONS.md`.
 
 ## 20.2 Add deterministic fallback
 
-- [ ] Create a template-based summary.
-- [ ] Use it when no API key is configured.
-- [ ] Use it when the model times out.
-- [ ] Use it when the model response fails validation.
-- [ ] Test: the product works fully without AI access.
+- [x] Create a template-based summary.
+- [x] Use it when no API key is configured.
+- [x] Use it when the model times out.
+- [x] Use it when the model response fails validation.
+- [x] Test: the product works fully without AI access.
 
 ## 20.3 Add model integration
 
-- [ ] Add provider configuration through environment variables.
-- [ ] Set a short timeout.
-- [ ] Limit prompt and response size.
-- [ ] Validate output format.
-- [ ] Avoid sending unnecessary raw telemetry.
-- [ ] Log latency and estimated cost without logging secrets.
-- [ ] Test success, timeout, malformed response, and no-key paths.
+- [x] Add provider configuration through environment variables.
+- [x] Set a short timeout.
+- [x] Limit prompt and response size.
+- [x] Validate output format.
+- [x] Avoid sending unnecessary raw telemetry.
+- [x] Log latency and token usage without logging secrets.
+- [x] Test success, timeout, malformed response, and no-key paths.
 
 ## 20.4 Display the summary
 
-- [ ] Show the AI or deterministic summary in incident details.
-- [ ] Label the summary as generated text.
-- [ ] Keep source evidence visible.
-- [ ] Never allow summary text to override structured incident fields.
-- [ ] Test: incorrect generated text cannot change ticket data.
+- [x] Show the AI or deterministic summary in incident details.
+- [x] Label the summary as generated text.
+- [x] Keep source evidence visible.
+- [x] Never allow summary text to override structured incident fields.
+- [x] Test: incorrect generated text cannot change ticket data.
 
 ---
 

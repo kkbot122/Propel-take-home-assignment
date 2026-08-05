@@ -834,6 +834,7 @@ The exact schema will be maintained in generated OpenAPI documentation. Planned 
 | `POST` | `/api/telemetry/batch`              | Accept a bounded telemetry batch           |
 | `GET`  | `/api/incidents`                    | List incidents with filters                |
 | `GET`  | `/api/incidents/{id}`               | Read incident evidence and affected assets |
+| `POST` | `/api/incidents/{id}/explanation`   | Generate a bounded operator explanation    |
 | `GET`  | `/api/tickets/{id}`                 | Read ticket and transition history         |
 | `POST` | `/api/tickets/{id}/acknowledge`     | Acknowledge a detected ticket              |
 | `POST` | `/api/tickets/{id}/assign`          | Assign a crew stub                         |
@@ -877,7 +878,10 @@ The deployed application must not depend on a reviewer-provided geocoding key.
 
 ## 18. AI feature
 
-The proposed AI feature is a short operator-facing incident explanation generated from deterministic incident evidence.
+The AI feature is a short operator-facing incident explanation generated on
+demand from deterministic incident and ticket evidence. It returns three
+bounded sections: what happened, why Propel chose the probable cause, and what
+happens next in the ticket workflow.
 
 Example input to the model:
 
@@ -888,14 +892,23 @@ Example input to the model:
 * Contradictions or missing data
 * Restoration status
 
-The model does not choose the fault location, confidence score, ticket state, or restoration result.
+An allowlist excludes raw telemetry, coordinates, PIN codes, crew identity,
+operator-entered event text, and simulator ground truth. The model does not
+choose the fault location, confidence score, ticket state, or restoration
+result, and generated text is never written back to an incident or ticket.
 
 Fallback behaviour:
 
-* If the model is unavailable, the service renders a deterministic template.
+* The API uses a configured OpenAI-compatible chat-completions endpoint with a
+  strict JSON schema, short timeout, bounded input, and bounded output.
+* Missing configuration, provider errors, timeouts, refusals, and invalid
+  responses render the deterministic template with HTTP 200.
 * Generated text is never treated as system state.
 * The UI labels generated summaries and still exposes the underlying evidence.
-* Cost, latency, and model usage will be measured and documented after implementation.
+* The browser caches by incident and ticket update timestamps, so explanations
+  regenerate only when authoritative evidence or workflow state changes.
+* Logs record source, model, latency, token usage when supplied, and fallback
+  category without recording prompts, evidence, output text, or secrets.
 
 ## 19. Scalability and performance
 

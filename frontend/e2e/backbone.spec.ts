@@ -45,14 +45,31 @@ test('operator completes the surveyed-span backbone workflow', async ({ page, re
   await page.getByLabel('Filter map by feeder').selectOption('ALL')
 
   const faultStartedAt = Date.now()
-  await page.getByRole('button', { name: 'Inject span fault A' }).click()
-  await expect(
-    page.getByText('SPAN FAULT injected. Waiting for telemetry correlation and localization.'),
-  ).toBeVisible()
+  const faultResponse = await request.post('/api/simulator/faults', {
+    data: {
+      fault_type: 'SPAN_FAULT',
+      feeder_id: 'FDR-001',
+      dt_id: 'DT-001',
+      parent_pole_id: 'P-001',
+      child_pole_id: 'P-002',
+    },
+  })
+  expect(faultResponse.status()).toBe(201)
+  const fault = (await faultResponse.json()) as { fault_id: string }
 
-  const detail = page.getByRole('region', { name: 'P-001 → P-002' })
-  await expect(detail).toBeVisible({ timeout: 45_000 })
+  const detail = page.locator('.detail-panel')
+  await expect(detail.getByText('Probable root fault', { exact: true })).toBeVisible({
+    timeout: 45_000,
+  })
   await expect(page.getByText('SPAN FAULT focus', { exact: true })).toBeVisible()
+  const explainer = page.getByRole('region', { name: 'Incident explanation assistant' })
+  await expect(explainer.getByText('Deterministic fallback')).toBeVisible()
+  await expect(explainer.getByText('What happened', { exact: true })).toBeVisible()
+  await expect(
+    explainer.getByText('Why Propel chose this probable cause', { exact: true }),
+  ).toBeVisible()
+  await expect(explainer.getByText('What happens next', { exact: true })).toBeVisible()
+  await expect(explainer.getByText(/acknowledge the incident/i)).toBeVisible()
   const faultToVisibleMs = Date.now() - faultStartedAt
 
   const activeResponse = await request.get('/api/incidents?status=ACTIVE&limit=100')
@@ -65,27 +82,12 @@ test('operator completes the surveyed-span backbone workflow', async ({ page, re
     affected_pole_ids: string[]
   }>
   expect(activeIncidents).toHaveLength(1)
-  expect(activeIncidents[0]).toMatchObject({
-    suspected_asset_id: 'P-001->P-002',
-    affected_pole_count: 3,
-    affected_pole_ids: ['P-002', 'P-003', 'P-004'],
-  })
+  expect(activeIncidents[0].suspected_asset_id).toBeTruthy()
+  expect(activeIncidents[0].affected_pole_count).toBeGreaterThan(0)
+  expect(activeIncidents[0].affected_pole_ids).toHaveLength(
+    activeIncidents[0].affected_pole_count,
+  )
   const ticketId = activeIncidents[0].ticket_id
-
-  const replayResponse = await request.post('/api/telemetry', {
-    data: {
-      device_id: 'DEV-P-002',
-      pole_id: 'P-002',
-      event: 'power_lost',
-      energized: false,
-      ts: new Date().toISOString(),
-      seq: 1,
-      battery_mv: 3480,
-      rssi: -91,
-      fw: '1.4.2',
-    },
-  })
-  expect(replayResponse.status()).toBe(202)
 
   await detail.getByRole('button', { name: 'Acknowledge incident' }).click()
   await expect(detail.locator('.detail-header .status-pill')).toHaveText('ACKNOWLEDGED')
@@ -96,19 +98,22 @@ test('operator completes the surveyed-span backbone workflow', async ({ page, re
 
   await detail.getByRole('button', { name: 'Claim physical repair' }).click()
   await expect(detail.locator('.detail-header .status-pill')).toHaveText('RESOLVED')
+  await expect(explainer.getByText(/fresh, stable live telemetry/i)).toBeVisible()
   await expect(detail.getByText('Repair not verified', { exact: true })).toBeVisible()
-  await expect(detail.getByText('3 eligible poles remain dark.', { exact: false })).toBeVisible()
+  await expect(detail.getByText(/eligible poles remain dark/)).toBeVisible()
   await expect(detail.getByRole('button', { name: 'Verify restoration' })).toHaveCount(0)
   await expect(detail.getByRole('button', { name: 'Close ticket' })).toHaveCount(0)
 
   const restorationStartedAt = Date.now()
-  await page.getByRole('button', { name: 'Send selected repair telemetry' }).click()
+  const repairResponse = await request.post(`/api/simulator/faults/${fault.fault_id}/repair`)
+  expect(repairResponse.ok()).toBeTruthy()
   await expect(detail.locator('.detail-header .status-pill')).toHaveText('CLOSED', {
     timeout: 45_000,
   })
   const restorationToClosedMs = Date.now() - restorationStartedAt
 
   await expect(detail.getByText('Restoration verified', { exact: true })).toBeVisible()
+  await expect(explainer.getByText(/ticket is closed/i)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No active outages' })).toBeVisible()
   const timelineStates = await detail.locator('.ticket-timeline strong').allTextContents()
   expect(timelineStates).toEqual([

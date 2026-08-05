@@ -411,7 +411,9 @@ function installFetchRouter(options?: {
   unhealthy?: boolean
   diagnostics?: OperationalDiagnostics
   ticket?: Ticket
+  explanationFailure?: boolean
 }) {
+  let currentTicket = options?.ticket ?? ticket
   const request = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString()
     if (url === '/health') {
@@ -435,18 +437,49 @@ function installFetchRouter(options?: {
     if (url === '/api/incidents/incident-corridor') return jsonResponse(corridorIncident)
     if (url === '/api/incidents/incident-inferred') return jsonResponse(inferredIncident)
     if (url === '/api/incidents/incident-suppressed') return jsonResponse(suppressedIncident)
+    if (url.startsWith('/api/incidents/') && url.endsWith('/explanation')) {
+      if (options?.explanationFailure) {
+        return jsonResponse(
+          {
+            error: {
+              code: 'REQUEST_FAILED',
+              message: 'Explanation request failed',
+              retryable: true,
+            },
+          },
+          503,
+        )
+      }
+      const suppressed = url.includes('incident-suppressed')
+      return jsonResponse({
+        source: 'DETERMINISTIC',
+        what_happened: suppressed
+          ? 'Propel found an isolated sensor anomaly.'
+          : 'Propel found 3 affected poles downstream of P-001 to P-002.',
+        why_this_cause: suppressed
+          ? 'Live network evidence contradicts a normal outage.'
+          : 'A fresh live-to-dark boundary matches the outage pattern.',
+        what_happens_next: suppressed
+          ? 'No dispatch ticket was created because this finding is suppressed.'
+          : 'An operator should acknowledge the incident.',
+        incident_updated_at: '2026-08-04T01:00:00Z',
+        ticket_updated_at: suppressed ? null : '2026-08-04T01:00:00Z',
+        fallback_reason: 'NOT_CONFIGURED',
+      })
+    }
     if (url === '/api/tickets/ticket-1' && init?.method !== 'POST') {
-      return jsonResponse(options?.ticket ?? ticket)
+      return jsonResponse(currentTicket)
     }
     if (url === '/api/tickets/ticket-2' && init?.method !== 'POST') {
       return jsonResponse({ ...ticket, ticket_id: 'ticket-2', incident_id: 'incident-2' })
     }
     if (url === '/api/tickets/ticket-1/acknowledge') {
-      return jsonResponse({
-        ...ticket,
+      currentTicket = {
+        ...currentTicket,
         status: 'ACKNOWLEDGED',
+        updated_at: '2026-08-04T01:01:00Z',
         events: [
-          ...ticket.events,
+          ...currentTicket.events,
           {
             from_status: 'DETECTED',
             to_status: 'ACKNOWLEDGED',
@@ -456,7 +489,8 @@ function installFetchRouter(options?: {
             details: {},
           },
         ],
-      })
+      }
+      return jsonResponse(currentTicket)
     }
     if (url === '/api/network/subdivision/poles') return jsonResponse(poles)
     if (url === '/api/network/subdivision') return jsonResponse(networkSubdivision)
@@ -578,7 +612,7 @@ describe('App', () => {
     expect(screen.getByText('topology provenance')).toBeInTheDocument()
   })
 
-  it('arranges the operator overview before diagnostics and labels AI content as a static preview', async () => {
+  it('arranges the overview before diagnostics and explains the selected finding', async () => {
     installFetchRouter()
     renderApp()
 
@@ -594,9 +628,12 @@ describe('App', () => {
     expect(overview).toContainElement(
       screen.getByRole('heading', { name: 'Incident explanation assistant' }),
     )
-    expect(screen.getByText('Frontend preview')).toBeInTheDocument()
+    expect(await screen.findByText('Deterministic fallback')).toBeInTheDocument()
+    expect(screen.getByText('What happened')).toBeInTheDocument()
+    expect(screen.getByText('Why Propel chose this probable cause')).toBeInTheDocument()
+    expect(screen.getByText('What happens next')).toBeInTheDocument()
     expect(
-      screen.getByText('This preview is static and makes no operational decisions.'),
+      screen.getByText('Generated text makes no localization, score, or ticket decisions.'),
     ).toBeInTheDocument()
     expect(
       overview.compareDocumentPosition(diagnosticsRegion) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -616,6 +653,22 @@ describe('App', () => {
       '/api/tickets/ticket-1/acknowledge',
       expect.objectContaining({ method: 'POST' }),
     )
+    await waitFor(() => {
+      const explanationCalls = fetchMock.mock.calls.filter(
+        ([url]) => url === '/api/incidents/incident-1/explanation',
+      )
+      expect(explanationCalls).toHaveLength(2)
+    })
+  })
+
+  it('shows an explanation error without affecting authoritative incident actions', async () => {
+    installFetchRouter({ explanationFailure: true })
+    renderApp()
+
+    expect(await screen.findByText('Explanation unavailable')).toBeInTheDocument()
+    expect(screen.getByText(/Explanation request failed/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'P-001 → P-002' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Acknowledge incident' })).toBeEnabled()
   })
 
   it('retains the worked ticket detail after it leaves the active queue', async () => {

@@ -2,6 +2,23 @@
 
 Decisions are listed newest first. Dates use `YYYY-MM-DD`.
 
+## 2026-08-05 — Keep AI explanation downstream of deterministic decisions
+
+**Chosen:** Generate a selected incident's three-part operator explanation from
+an allowlisted projection of already-decided incident and ticket evidence. Use a
+bounded OpenAI-compatible structured-output call when configured and a
+deterministic template for missing configuration or every provider failure.
+Cache only in the browser by incident and ticket revision; do not persist prose.
+
+**Reason:** Operators get a concise account of the finding, evidence, and next
+workflow action without giving generated text authority over localization,
+confidence, dispatch, restoration, or closure. The product remains fully usable
+without an AI provider and never exposes simulator ground truth to the model.
+
+**Rejected:** Model-driven localization or transitions, free-form incident chat,
+raw telemetry prompts, generated-summary persistence, and treating provider
+availability as an operational health dependency.
+
 ## 2026-08-05 — Separate the operator overview from deep diagnostics
 
 **Chosen:** Keep the first desktop viewport focused on the live network map, simulator, current

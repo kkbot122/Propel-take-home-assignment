@@ -35,6 +35,23 @@ export interface Incident {
   assigned_crew: string | null
 }
 
+export interface IncidentExplanation {
+  source: 'AI_GENERATED' | 'DETERMINISTIC'
+  what_happened: string
+  why_this_cause: string
+  what_happens_next: string
+  incident_updated_at: string
+  ticket_updated_at: string | null
+  fallback_reason:
+    | 'NOT_CONFIGURED'
+    | 'INPUT_TOO_LARGE'
+    | 'TIMEOUT'
+    | 'PROVIDER_ERROR'
+    | 'REFUSAL'
+    | 'INVALID_RESPONSE'
+    | null
+}
+
 export interface TicketEvent {
   from_status: TicketStatus | null
   to_status: TicketStatus

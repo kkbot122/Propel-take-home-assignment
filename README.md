@@ -270,6 +270,7 @@ Included:
 * Fault detection, localization, classification, and grouping
 * Ticket lifecycle and restoration verification
 * Operator console
+* Optional AI-generated incident explanations with deterministic fallback
 * Fault simulator
 
 Not included:

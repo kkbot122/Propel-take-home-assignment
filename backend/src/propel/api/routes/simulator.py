@@ -281,6 +281,11 @@ async def repair_fault(
 )
 async def reset_simulator(request: Request) -> SimulatorResetResponse | JSONResponse:
     try:
+        active_faults = await simulator_service(request).active_faults()
+        for fault in active_faults:
+            await request.app.state.incident_service.claim_simulator_repairs_for_poles(
+                fault.deenergized_pole_ids
+            )
         repaired_faults = await simulator_service(request).reset()
     except SimulatorTelemetryUnavailableError:
         return simulator_unavailable(
@@ -298,6 +303,11 @@ async def reset_simulator(request: Request) -> SimulatorResetResponse | JSONResp
         return simulator_unavailable(
             "SIMULATOR_STORE_UNAVAILABLE",
             "simulator state is temporarily unavailable",
+        )
+    except IncidentStoreUnavailableError:
+        return simulator_unavailable(
+            "INCIDENT_STORE_UNAVAILABLE",
+            "ticket repair workflow is temporarily unavailable",
         )
     return SimulatorResetResponse(
         repaired_faults=[SimulatedFaultResponse.model_validate(item) for item in repaired_faults]

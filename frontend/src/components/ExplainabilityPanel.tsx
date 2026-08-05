@@ -1,17 +1,24 @@
 import { ShieldCheckIcon, SparkleIcon } from '@phosphor-icons/react'
 
-const EXAMPLE_PROMPTS = [
-  'Summarize the fault evidence',
-  'Explain the evidence score',
-  'What should the crew verify?',
-]
+import type { Incident, IncidentExplanation } from '../api/types'
 
-export function ExplainabilityPanel() {
+interface ExplainabilityPanelProps {
+  incident: Incident | null
+  explanation: IncidentExplanation | null
+  loading: boolean
+  error: string | null
+}
+
+export function ExplainabilityPanel({
+  incident,
+  explanation,
+  loading,
+  error,
+}: ExplainabilityPanelProps) {
   return (
     <section
       className="panel explainability-panel"
       aria-labelledby="explainability-title"
-      data-static-preview="true"
     >
       <div className="explainability-heading">
         <span className="explainability-icon" aria-hidden="true">
@@ -21,31 +28,54 @@ export function ExplainabilityPanel() {
           <p className="section-label">AI explainability</p>
           <h2 id="explainability-title">Incident explanation assistant</h2>
         </div>
-        <span className="preview-badge">Frontend preview</span>
+        {explanation && (
+          <span className={`preview-badge${explanation.source === 'AI_GENERATED' ? ' ai' : ''}`}>
+            {explanation.source === 'AI_GENERATED' ? 'AI generated' : 'Deterministic fallback'}
+          </span>
+        )}
       </div>
 
       <div className="explainability-content">
-        <div className="example-explanation">
-          <span>Example response</span>
-          <strong>Why is this the probable root fault?</strong>
-          <p>
-            A concise operator explanation will appear here after the AI integration is connected.
-            It will translate the structured incident evidence without changing the selected fault,
-            score, or ticket state.
-          </p>
-        </div>
-
-        <div className="explainability-prompts" aria-label="Planned explanation prompts">
-          {EXAMPLE_PROMPTS.map((prompt) => (
-            <span key={prompt}>{prompt}</span>
-          ))}
-        </div>
+        {!incident && (
+          <div className="example-explanation explainability-empty">
+            <strong>Select a current finding</strong>
+            <p>Its evidence and ticket workflow will be explained here in plain language.</p>
+          </div>
+        )}
+        {incident && loading && (
+          <div className="loading-block" role="status">
+            <span className="spinner" aria-hidden="true" />
+            Explaining this finding…
+          </div>
+        )}
+        {incident && error && !loading && (
+          <div className="example-explanation explainability-error" role="alert">
+            <strong>Explanation unavailable</strong>
+            <p>{error}</p>
+          </div>
+        )}
+        {incident && explanation && !loading && (
+          <div className="explanation-sections">
+            <article>
+              <span>What happened</span>
+              <p>{explanation.what_happened}</p>
+            </article>
+            <article>
+              <span>Why Propel chose this probable cause</span>
+              <p>{explanation.why_this_cause}</p>
+            </article>
+            <article>
+              <span>What happens next</span>
+              <p>{explanation.what_happens_next}</p>
+            </article>
+          </div>
+        )}
 
         <div className="explainability-boundary">
           <ShieldCheckIcon size={18} weight="duotone" aria-hidden="true" />
           <p>
             <strong>System evidence remains authoritative.</strong>
-            <span>This preview is static and makes no operational decisions.</span>
+            <span>Generated text makes no localization, score, or ticket decisions.</span>
           </p>
         </div>
       </div>

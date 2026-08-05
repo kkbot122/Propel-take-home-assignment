@@ -232,6 +232,21 @@ export function App() {
     retry: 1,
   })
   const ticket: Ticket | null = ticketQuery.data ?? null
+  const explanationReady =
+    selectedIncident !== null && (selectedIncident.ticket_id === null || ticket !== null)
+  const explanationQuery = useQuery({
+    queryKey: [
+      'incident-explanation',
+      selectedIncident?.incident_id,
+      selectedIncident?.updated_at,
+      ticket?.updated_at ?? null,
+    ],
+    queryFn: () => api.explainIncident(selectedIncident?.incident_id as string),
+    enabled: explanationReady,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  })
 
   async function refreshOperationalData() {
     await Promise.all([
@@ -475,7 +490,12 @@ export function App() {
               </div>
             </section>
 
-            <ExplainabilityPanel />
+            <ExplainabilityPanel
+              incident={selectedIncident}
+              explanation={explanationQuery.data ?? null}
+              loading={explanationReady && explanationQuery.isPending}
+              error={explanationQuery.error ? errorMessage(explanationQuery.error) : null}
+            />
           </div>
 
           <div className="overview-right">

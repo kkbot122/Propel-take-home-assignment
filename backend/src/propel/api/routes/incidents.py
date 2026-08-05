@@ -8,6 +8,7 @@ from propel.api.routes.telemetry import error_response
 from propel.api.schemas.incidents import (
     AcknowledgeTicketRequest,
     AssignTicketRequest,
+    IncidentExplanationResponse,
     IncidentResponse,
     NetworkOverviewResponse,
     NetworkPoleResponse,
@@ -18,6 +19,7 @@ from propel.api.schemas.incidents import (
 )
 from propel.api.schemas.telemetry import ErrorResponse
 from propel.domain.enums import IncidentStatus, TicketStatus
+from propel.incidents.explanations import IncidentExplanationService
 from propel.incidents.workflow import (
     AutomaticTransitionOnlyError,
     InvalidTicketTransitionError,
@@ -42,6 +44,10 @@ ERROR_RESPONSES = {
 
 def incident_service(request: Request) -> PostgresIncidentService:
     return request.app.state.incident_service
+
+
+def explanation_service(request: Request) -> IncidentExplanationService:
+    return request.app.state.explanation_service
 
 
 def unavailable_response() -> JSONResponse:
@@ -135,6 +141,37 @@ async def get_incident(incident_id: UUID, request: Request) -> IncidentResponse 
     except IncidentStoreUnavailableError:
         return unavailable_response()
     return IncidentResponse.model_validate(view)
+
+
+@router.post(
+    "/incidents/{incident_id}/explanation",
+    response_model=IncidentExplanationResponse,
+    responses=ERROR_RESPONSES,
+)
+async def explain_incident(
+    incident_id: UUID,
+    request: Request,
+) -> IncidentExplanationResponse | JSONResponse:
+    try:
+        incident = await incident_service(request).get_incident(incident_id)
+        ticket = (
+            await incident_service(request).get_ticket(incident.ticket_id)
+            if incident.ticket_id is not None
+            else None
+        )
+    except IncidentNotFoundError:
+        return error_response(
+            status.HTTP_404_NOT_FOUND,
+            "INCIDENT_NOT_FOUND",
+            "incident does not exist",
+            retryable=False,
+        )
+    except TicketNotFoundError:
+        return ticket_not_found_response()
+    except IncidentStoreUnavailableError:
+        return unavailable_response()
+    explanation = await explanation_service(request).explain(incident, ticket)
+    return IncidentExplanationResponse.model_validate(explanation)
 
 
 @router.get(

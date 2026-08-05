@@ -13,6 +13,7 @@ from propel.domain.enums import (
     TicketStatus,
     TopologySource,
 )
+from propel.incidents.explanations import ExplanationFallbackReason, ExplanationSource
 
 OperatorName = Annotated[
     str,
@@ -66,6 +67,18 @@ class IncidentResponse(BaseModel):
     ticket_id: UUID | None
     ticket_status: TicketStatus | None
     assigned_crew: str | None
+
+
+class IncidentExplanationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    source: ExplanationSource
+    what_happened: Annotated[str, Field(min_length=1, max_length=320)]
+    why_this_cause: Annotated[str, Field(min_length=1, max_length=320)]
+    what_happens_next: Annotated[str, Field(min_length=1, max_length=320)]
+    incident_updated_at: datetime
+    ticket_updated_at: datetime | None
+    fallback_reason: ExplanationFallbackReason | None
 
 
 class TicketEventResponse(BaseModel):
